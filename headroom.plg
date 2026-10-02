@@ -5,7 +5,7 @@ Native Unraid memory protection with automatic Docker/VM/service reapplication; 
 ]]></CHANGES>
 <FILE Name="/boot/config/plugins/headroom/headroom-2026.10.02.1.tar.gz">
 <URL>https://github.com/nphil/headroom/releases/download/2026.10.02.1/headroom-2026.10.02.1.tar.gz</URL>
-<MD5>a36a78c055921a8333aff148003019e4</MD5>
+<MD5>a3fd0b775d6fe033f8c4ae0aef5cd55c</MD5>
 </FILE>
 <FILE Name="/tmp/headroom-install-2026.10.02.1" Run="/bin/bash"><INLINE><![CDATA[
 #!/bin/bash
@@ -15,7 +15,7 @@ archive=/boot/config/plugins/headroom/headroom-2026.10.02.1.tar.gz
 stage=$(mktemp -d /tmp/headroom-install.XXXXXX)
 cleanup() { rm -rf -- "$stage"; rm -f -- /tmp/headroom-install-2026.10.02.1; }
 trap cleanup EXIT
-printf '%s  %s\n' 'd8791f2963fa0f768465e368c09e25dc9454b08c110f1939808b017d159b9c4c' "$archive" | sha256sum -c -
+printf '%s  %s\n' 'b5058e248c9b1ef5ddbcb64320dabeac4a5513668e4b70a3f6a38d91c2575a63' "$archive" | sha256sum -c -
 mkdir "$stage/new"
 tar --no-same-owner -xzf "$archive" -C "$stage/new"
 for file in cli.php daemon.php lib/config.php lib/system.php lib/monitor.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
