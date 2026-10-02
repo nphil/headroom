@@ -2,6 +2,8 @@
 declare(strict_types=1);
 namespace Headroom;
 require_once __DIR__.'/swap.php';
+const SWAP_LOW_RAM_FACTOR=1.5; // "RAM is low" for swap = available below 1.5x the memory-pressure threshold (15% by default).
+const SWAP_CLEAR_MARGIN=5;      // Swap warning clears 5 percentage points below where it started.
 
 function db(): \SQLite3 {
     static $db=null;
@@ -57,7 +59,15 @@ function events(): array {
 function pressure_step(array $state, array $s, array $c, int $now): array {
     $available=100*$s['available']/max(1,$s['total']);
     $pressure=$available<$c['available_percent'] || ($s['psi_some']!==null && $s['psi_some']>=$c['psi_some']) || ($s['psi_full']!==null && $s['psi_full']>=$c['psi_full']);
-    $swap=$s['swap_size']>0 && 100*$s['swap_used']/$s['swap_size'] >= $c['swap_percent'];
+    // Full compressed swap is normal while RAM is free (cold pages parked cheaply). Swap only counts as a
+    // warning when it is full AND the RAM left to absorb a burst is low, or tasks are visibly waiting for RAM.
+    // Hysteresis: once raised, the warning clears only after clear improvement, so it cannot flap at a boundary.
+    $was=!empty($state['swap_now']); $swapPercent=$s['swap_size']>0 ? 100*$s['swap_used']/$s['swap_size'] : 0;
+    $tight=$c['available_percent']*SWAP_LOW_RAM_FACTOR*($was?1.25:1);
+    $waiting=fn(?float $v,int $limit)=>$v!==null && $v>=$limit/2*($was?0.5:1);
+    $full=$swapPercent >= $c['swap_percent']-($was?SWAP_CLEAR_MARGIN:0);
+    $swap=$full && ($available<$tight || $waiting($s['psi_some'],$c['psi_some']) || $waiting($s['psi_full'],$c['psi_full']));
+    $state['swap_full']=$swapPercent >= $c['swap_percent'];
     $messages=[];
     foreach (['pressure'=>$pressure,'swap'=>$swap] as $key=>$active) {
         $was=$state[$key]??['since'=>null,'notified'=>false];
@@ -117,8 +127,8 @@ function monitor_tick(array $s, array $c, array $items): array {
     foreach ($step['messages'] as $message) {
         $description=match($message) {
             'pressure'=>'Memory pressure has stayed high. '.round($s['available']/GIB,1).' GiB available; waiting for RAM: some '.($s['psi_some']??'unknown').'%, full '.($s['psi_full']??'unknown').'%.',
-            'swap'=>'Swap is '.round(100*$s['swap_used']/max(1,$s['swap_size'])).'% full. This reduces room for the next burst; it does not by itself mean RAM is exhausted.',
-            'pressure_recovered'=>'Memory pressure has eased.', 'swap_recovered'=>'Swap has room again.'};
+            'swap'=>'Swap is '.round(100*$s['swap_used']/max(1,$s['swap_size'])).'% full and only '.round($s['available']/GIB,1).' GiB of RAM is available, so there is little room for the next burst of memory use.',
+            'pressure_recovered'=>'Memory pressure has eased.', 'swap_recovered'=>'Swap warning cleared: RAM has room again.'};
         event('pressure',$description);
         if ($c['alerts']) notify('Memory '.(str_ends_with($message,'recovered')?'recovered':'warning'),$description,str_ends_with($message,'recovered')?'normal':'warning');
     }

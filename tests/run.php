@@ -95,10 +95,44 @@ test('brief pressure does not alert; sustained alert occurs once then recovery',
     $s['available']=40; $r=pressure_step($r['state'],$s,$c,201); same($r['messages'],['pressure_recovered']);
     $r=pressure_step($r['state'],$s,$c,250); same($r['messages'],[]);
 });
-test('full swap alone is a warning, not a graceful-stop trigger',function(){
-    $s=['total'=>100,'available'=>50,'psi_some'=>0.,'psi_full'=>0.,'swap_size'=>100,'swap_used'=>95];
+test('full swap with plenty of free RAM is healthy: no warning, only an informational flag',function(){
+    // Mirrors this server: zram ~91% full, ~34% of RAM available, PSI idle.
+    $s=['total'=>100,'available'=>34,'psi_some'=>0.,'psi_full'=>0.,'swap_size'=>100,'swap_used'=>91];
+    $r=pressure_step([],$s,defaults(),100); $r=pressure_step($r['state'],$s,defaults(),400);
+    same($r['messages'],[]); same($r['state']['swap_now'],false); same($r['state']['pressure_now'],false); same($r['state']['swap_full'],true);
+    $s['psi_some']=null; $s['psi_full']=null; $r=pressure_step($r['state'],$s,defaults(),800); // PSI not enabled yet
+    same($r['messages'],[]); same($r['state']['swap_now'],false);
+});
+test('full swap with low RAM warns once, is not a graceful-stop trigger, and recovers',function(){
+    $s=['total'=>100,'available'=>12,'psi_some'=>0.,'psi_full'=>0.,'swap_size'=>100,'swap_used'=>95];
+    $r=pressure_step([],$s,defaults(),100); same($r['messages'],[]);
+    $r=pressure_step($r['state'],$s,defaults(),160); same($r['messages'],['swap']); same($r['state']['pressure_now'],false); same($r['state']['swap_now'],true);
+    $r=pressure_step($r['state'],$s,defaults(),200); same($r['messages'],[]);
+    $s['available']=40; $r=pressure_step($r['state'],$s,defaults(),210); same($r['messages'],['swap_recovered']);
+});
+test('full swap with real waiting-for-RAM pressure warns even when RAM looks adequate',function(){
+    $s=['total'=>100,'available'=>30,'psi_some'=>6.,'psi_full'=>0.,'swap_size'=>100,'swap_used'=>95];
     $r=pressure_step([],$s,defaults(),100); $r=pressure_step($r['state'],$s,defaults(),160);
-    same($r['messages'],['swap']); same($r['state']['pressure_now'],false);
+    same($r['messages'],['swap']);
+});
+test('low RAM without full swap does not raise the swap warning',function(){
+    $s=['total'=>100,'available'=>12,'psi_some'=>0.,'psi_full'=>0.,'swap_size'=>100,'swap_used'=>40];
+    $r=pressure_step([],$s,defaults(),100); $r=pressure_step($r['state'],$s,defaults(),160);
+    same($r['messages'],[]); same($r['state']['swap_now'],false);
+});
+test('swap warning does not flap around its thresholds',function(){
+    $c=defaults(); $mk=fn($avail,$used)=>['total'=>100,'available'=>$avail,'psi_some'=>0.,'psi_full'=>0.,'swap_size'=>100,'swap_used'=>$used];
+    $r=pressure_step([],$mk(14,90),$c,0); $r=pressure_step($r['state'],$mk(14,90),$c,60); same($r['messages'],['swap']);
+    $t=60; $sent=[];
+    // Just inside the clear margins on both axes (RAM 16-18% vs 15% trigger; swap 81-84% vs 85%): stays raised, silent.
+    foreach ([[16,84],[18,83],[16,81],[14,90],[18,82]] as [$avail,$used]) { $r=pressure_step($r['state'],$mk($avail,$used),$c,$t+=15); $sent=array_merge($sent,$r['messages']); same($r['state']['swap_now'],true); }
+    same($sent,[]);
+    // Clearly better: RAM above 18.75% -> recovered once; and it needs the full trigger again to return.
+    $r=pressure_step($r['state'],$mk(19,90),$c,$t+=15); same($r['messages'],['swap_recovered']);
+    $r=pressure_step($r['state'],$mk(16,90),$c,$t+=15); same($r['state']['swap_now'],false); same($r['messages'],[]);
+    // Swap dropping below 80% also clears.
+    $r=pressure_step($r['state'],$mk(14,90),$c,$t+=15); $r=pressure_step($r['state'],$mk(14,90),$c,$t+=60); same($r['messages'],['swap']);
+    $r=pressure_step($r['state'],$mk(14,79),$c,$t+=15); same($r['messages'],['swap_recovered']);
 });
 test('early candidate excludes VMs, protected and unapproved apps',function(){
     $make=fn($name,$kind,$level,$eligible,$usage)=>['name'=>$name,'kind'=>$kind,'state'=>'running','usage'=>$usage,'policy'=>['level'=>$level,'eligible'=>$eligible]];

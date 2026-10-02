@@ -10,7 +10,7 @@ const RUN = '/tmp/headroom';
 const GIB = 1073741824;
 const MIB = 1048576;
 const LEVELS = ['never' => -1000, 'last' => -500, 'normal' => 0, 'early' => 500, 'first' => 1000];
-const LABELS = ['never' => 'Never stop', 'last' => 'Stop last', 'normal' => 'Normal', 'early' => 'Stop early', 'first' => 'Stop first'];
+const LABELS = ['never' => 'Always protected', 'last' => 'Keep running', 'normal' => 'Normal', 'early' => 'Gives way first', 'first' => 'Gives way before all'];
 const CORE = ['emhttpd','nginx','php-fpm','dockerd','containerd','shfs','smbd','sshd','tailscaled','ttyd','rsyslogd','upsmon','usbhid-ups','upsd','libvirtd','virtqemud'];
 
 function defaults(): array {
@@ -71,10 +71,10 @@ function validate(array $input): array {
         if (!isset(LEVELS[$item['level']]) || !is_bool($item['whole']) || !is_bool($item['eligible'])) throw new \InvalidArgumentException('Invalid memory preference.');
         integer($item['reserve_mib'], 0, 65536, 'Reservation (MiB)');
         if (str_starts_with($id, 'proc:') && $item['reserve_mib'] !== 0) throw new \InvalidArgumentException('Host-service reservations are not supported; core processes are protected from memory kills.');
-        if ($item['reserve_mib'] && !in_array($item['level'], ['never','last'], true)) throw new \InvalidArgumentException('Only Never stop / Stop last can reserve memory.');
+        if ($item['reserve_mib'] && !in_array($item['level'], ['never','last'], true)) throw new \InvalidArgumentException('Only Always protected / Keep running apps can reserve memory.');
         if (($item['whole'] || $item['eligible']) && !str_starts_with($id, 'docker:')) throw new \InvalidArgumentException('Whole-app and early-action settings apply only to containers.');
         if ($item['eligible'] && LEVELS[$item['level']] < 0) throw new \InvalidArgumentException('Protected apps cannot be eligible for early action.');
-        if (str_starts_with($id, 'proc:') && in_array(substr($id,5), CORE, true) && $item['level'] !== 'never') throw new \InvalidArgumentException('Core Unraid services must remain Never stop.');
+        if (str_starts_with($id, 'proc:') && in_array(substr($id,5), CORE, true) && $item['level'] !== 'never') throw new \InvalidArgumentException('Core Unraid services must remain Always protected.');
     }
     unset($item);
     foreach (CORE as $name) $c['items']['proc:'.$name] = ['level'=>'never','whole'=>false,'reserve_mib'=>0,'eligible'=>false];

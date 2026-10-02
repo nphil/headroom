@@ -21,12 +21,12 @@ Actual Unraid 7.3.2 screens. Headroom follows all four native themes: black, whi
 
 ## What it does
 
-- **Memory protection:** choose Never stop, Stop last, Normal, Stop early or Stop first. Container priority is saved as Docker’s own setting in the Unraid template, so normal updates keep it. The watcher is a backup, not the primary mechanism. Core Unraid services stay Never stop. “Stop whole app” is off by default, so one greedy process need not take every task with it.
+- **Memory protection:** choose Always protected, Keep running, Normal, Gives way first or Gives way before all (the same words as the protection plan card). Container priority is saved as Docker’s own setting in the Unraid template, so normal updates keep it. The watcher is a backup, not the primary mechanism. Core Unraid services stay Always protected. “Stop whole app” is off by default, so one greedy process need not take every task with it.
 - **Useful limits, without restarts:** change a container's memory limit live and in its saved Unraid template. A too-tight limit is refused. A limit can still stop a process inside an app even if the host has spare RAM; separate swap caps depend on kernel support.
 - **Compressed swap and ZFS cache:** fixed or percentage-based zram size, compression and priorities; guarded resize/refresh; ARC size, target, maximum and hit rate. Existing labelled zram is adopted without draining it.
 - **Warnings and history:** available RAM, swap, kernel memory delays (PSI), OOM kills, RAM-backed files and top consumers. Unraid's own notification system delivers alerts. History is one sample per minute for up to 72 hours, capped at 16 MiB in RAM; it resets on reboot, without writing every sample to your flash drive.
 
-“Never stop” means excluded from the kernel's memory-kill choice, **not an absolute uptime guarantee**. Hardware faults, administrator actions and applications' own failures can still stop services. The kernel considers memory use as well as these preferences; this is not a rigid queue.
+“Always protected” means excluded from the kernel's memory-kill choice, **not an absolute uptime guarantee**. Hardware faults, administrator actions and applications' own failures can still stop services. The kernel considers memory use as well as these preferences; this is not a rigid queue.
 
 ### How priorities survive app updates
 
@@ -43,9 +43,9 @@ For 64 GB RAM with cameras, Plex, Home Assistant voice and AI workloads:
 - 16 GiB zram, zstd, priority 100, swappiness 150.
 - Keep the ZFS ARC maximum at **8 GiB**. It gives apps space while retaining a useful file cache.
 - **Leave disk swap off.** Every SSD pool here uses ZFS. Swap on ZFS, including a zvol, can deadlock under memory pressure. Headroom only offers directly mounted non-ZFS XFS/ext4 or single-device Btrfs targets; never array disks, USB, network or loop-backed files.
-- Cody is Stop early; Plex, qBittorrent, llama-swap and Scrypted are Stop last; unlisted apps are Normal. Core host services are Never stop. These preferences come from migration, not hard-coded app names.
+- Cody is Gives way first; Plex, qBittorrent, llama-swap and Scrypted are Keep running; unlisted apps are Normal. Core host services are Always protected. These preferences come from migration, not hard-coded app names.
 
-Reservations are optional and initially zero. A Never stop reservation uses a hard reclaim floor; Stop last uses best-effort protection. Parent control groups are configured too, so reservations are effective. Total reservations cannot exceed 25% of physical RAM. Reserving everything would leave the kernel no room to recover.
+Reservations are optional and initially zero. An Always protected reservation uses a hard reclaim floor; Keep running uses best-effort protection. Parent control groups are configured too, so reservations are effective. Total reservations cannot exceed 25% of physical RAM. Reserving everything would leave the kernel no room to recover.
 
 ### Pressure statistics after a reboot
 
@@ -53,9 +53,22 @@ Some Unraid kernels include PSI but disable it by default. Headroom shows **“A
 
 Swap evacuation currently requires trustworthy PSI readings as well as enough available RAM. Until PSI is active, refresh, resize or removal that needs evacuation is deliberately refused. Normal operation and legacy adoption do not drain swap.
 
+### When Headroom warns about swap
+
+Compressed swap (zram) is meant to fill with rarely-used data. With zram and swappiness 150 the kernel parks cold pages there on purpose, so a full zram device while plenty of RAM is free is **healthy**, not a fault. Headroom therefore never warns on swap percentage alone. It shows a plain note instead (“Compressed memory is full of rarely-used data. That is normal while RAM is free…”).
+
+The “Swap full, RAM low” badge and notification need **both**:
+
+1. swap at or above the swap warning level (default 85%), and
+2. either available RAM below **1.5 × the memory-pressure threshold** (default 15% of RAM, about 9 GiB on a 64 GB server), or time spent waiting for RAM (PSI) at or above half its warning level.
+
+Why 15%: the pressure alert already fires below 10% available. The swap warning is the earlier heads-up that the safety buffer is gone *and* there is no free RAM left to absorb a burst; it scales with the RAM size and with the threshold you set. PSI is only read once it is active after a reboot; until then RAM alone decides.
+
+To stop it flapping, the warning clears only after clear improvement: swap 5 points lower, RAM 25% above the trigger, or waiting-for-RAM at half the trigger. The usual “wait before warning” delay and one-notice-per-episode rule still apply.
+
 ### Optional early action
 
-Off by default. You must both enable it globally and mark individual containers “Allow early stop.” After sustained pressure, Headroom requests a graceful stop of the most expendable eligible app, then the largest app at that preference. Never stop, Stop last, VMs and core services are excluded. It stops at most one app per pressure episode, waits at least 15 minutes between actions, never force-kills it and does not automatically restart it. If an app ignores its stop request, the activity log says so.
+Off by default. You must both enable it globally and mark individual containers “Allow early stop.” After sustained pressure, Headroom requests a graceful stop of the most expendable eligible app, then the largest app at that preference. Always protected, Keep running, VMs and core services are excluded. It stops at most one app per pressure episode, waits at least 15 minutes between actions, never force-kills it and does not automatically restart it. If an app ignores its stop request, the activity log says so.
 
 The graceful request explicitly uses SIGTERM, even if an image requests an immediate-kill stop signal. There is no forced-kill deadline.
 
@@ -75,11 +88,11 @@ Headroom reads `unraid-zram-card/settings.ini`, carries over zram size/compressi
 
 | Old name | Headroom | Kernel score |
 |---|---|---:|
-| protected | Never stop | −1000 |
-| high | Stop last | −500 |
+| protected | Always protected | −1000 |
+| high | Keep running | −500 |
 | normal | Normal | 0 |
-| low | Stop early | +500 |
-| killfirst | Stop first | +1000 |
+| low | Gives way first | +500 |
+| killfirst | Gives way before all | +1000 |
 
 Two intentional safety changes: the old global whole-app kill setting becomes **off per container**, and automatic full-cap hard reservations become explicit opt-in reservations. Existing container limits are not changed during migration.
 
