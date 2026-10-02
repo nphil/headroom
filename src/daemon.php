@@ -13,7 +13,7 @@ $alive=true;
 pcntl_async_signals(true);
 pcntl_signal(SIGTERM,function()use(&$alive){$alive=false;});
 pcntl_signal(SIGINT,function()use(&$alive){$alive=false;});
-$streams=[]; $pending=[]; $containers=[]; $items=[]; $errors=[]; $dev='';
+$streams=[]; $pending=[]; $containers=[]; $items=[]; $itemsUpdated=0.; $errors=[]; $dev='';
 $nextInventory=0; $nextSample=0; $nextHistory=0; $nextRam=0; $nextOwnership=0; $ram=[];
 $watchdogReady=false; $nextWatchdog=0;
 function open_stream(array $command): array {
@@ -63,7 +63,7 @@ try {
                     $d=json_decode($line,true); $action=$d['Action']??$d['status']??'';
                     if (in_array($action,['start','restart','unpause','exec_start','die','destroy','update'],true)) {
                         $nextInventory=0;
-                        if (in_array($action,['start','restart'],true)) event('docker','Container '.($d['Actor']['Attributes']['name']??'unknown').' '.$action.'; protection scheduled.');
+                        if (in_array($action,['start','restart'],true)) event('docker','Container '.($d['Actor']['Attributes']['name']??'unknown').' '.$action.'; checking native priority.');
                     }
                 }
             }
@@ -72,8 +72,9 @@ try {
         if ($now>=$nextInventory) {
             $nextInventory=$now+15;
             try {
-                locked(function()use(&$c,&$items,&$containers,&$errors){
-                    $c=config(); $items=inventory($c); $result=apply_policy($c,$items);
+                locked(function()use(&$c,&$items,&$itemsUpdated,&$containers,&$errors){
+                    $c=config(); $items=inventory($c); $itemsUpdated=microtime(true); $result=apply_policy($c,$items);
+                    foreach($result['repairs'] as $name=>$count) event('priority-repair',$name.': safety net corrected '.$count.' process score(s) to match its native template/Docker priority.');
                     if ($result['errors']) $errors['protection']=implode('; ',$result['errors']); else unset($errors['protection']);
                     foreach ($items as $i) if ($i['kind']==='docker') $containers[$i['container_id']]=$i['name'];
                     if (count($containers)>500) $containers=array_slice($containers,-500,null,true);
@@ -103,7 +104,7 @@ try {
                 $state=locked(fn()=>monitor_tick($s,$c,$items),false);
                 if ($now>=$nextHistory) { history_add($s,$c['history_hours']); $nextHistory=$now+60; }
                 $visibleErrors=array_filter($errors,fn($k)=>!str_ends_with((string)$k,'_retry'),ARRAY_FILTER_USE_KEY);
-                save_json(RUN.'/status.json',['version'=>VERSION,'sample'=>$s,'items'=>public_items($items),'explain'=>explain($c,$s),
+                save_json(RUN.'/status.json',['version'=>VERSION,'sample'=>$s,'items'=>public_items($items),'items_updated'=>$itemsUpdated,'explain'=>explain($c,$s,$items),
                     'psi_requested'=>$c['psi_enabled'],'health'=>$state['pressure_now']?'Memory pressure':($state['swap_now']?'Swap nearly full':'Room to spare'),
                     'errors'=>$visibleErrors,'watchers'=>array_keys($streams),'updated'=>$now],0644);
                 unset($errors['sample']);

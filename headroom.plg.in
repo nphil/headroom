@@ -16,7 +16,7 @@ trap cleanup EXIT
 printf '%s  %s\n' '@SHA256@' "$archive" | sha256sum -c -
 mkdir "$stage/new"
 tar --no-same-owner -xzf "$archive" -C "$stage/new"
-for file in cli.php daemon.php lib/config.php lib/system.php lib/monitor.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
+for file in cli.php daemon.php lib/config.php lib/system.php lib/templates.php lib/monitor.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
   [[ -s "$stage/new/$file" ]] || { echo "Headroom package is incomplete: $file" >&2; exit 1; }
 done
 for file in "$stage/new"/*.php "$stage/new"/lib/*.php; do php -l "$file" >/dev/null; done

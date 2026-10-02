@@ -6,27 +6,35 @@ Headroom lives in **Settings → Headroom**, with a tile on the normal Dashboard
 
 ## Screenshots
 
-Actual Unraid 7.3.2 screens, using its native black theme. The same pages follow the active Unraid theme.
+Actual Unraid 7.3.2 screens. Headroom follows all four native themes: black, white, azure and gray. No external fonts or UI libraries.
 
-![Desktop Settings page](docs/screenshots/settings-desktop.png)
+![Desktop Settings page](docs/screenshots/after-headroom-settings-black-1440.png)
 ![Per-app memory protection and live limits](docs/screenshots/memory-protection.png)
-![Native Dashboard tile](docs/screenshots/dashboard-tile.png)
+![Native Dashboard tile](docs/screenshots/after-headroom-dashboard-black-1440.png)
 
 <details><summary>Phone views</summary>
 
-<img src="docs/screenshots/settings-phone.png" alt="Settings at a 390-pixel phone width" width="390">
-<img src="docs/screenshots/dashboard-phone.png" alt="Dashboard with a readable phone-sized Headroom tile" width="390">
+<img src="docs/screenshots/after-headroom-settings-black-360.png" alt="Settings at a 360-pixel phone width" width="360">
+<img src="docs/screenshots/after-headroom-dashboard-black-360.png" alt="Native Dashboard tile at a 360-pixel phone width" width="360">
 
 </details>
 
 ## What it does
 
-- **Memory protection:** choose Never stop, Stop last, Normal, Stop early or Stop first. New and recreated containers are picked up automatically. Core Unraid services stay Never stop. “Stop whole app” is off by default, so one greedy process need not take every task with it.
+- **Memory protection:** choose Never stop, Stop last, Normal, Stop early or Stop first. Container priority is saved as Docker’s own setting in the Unraid template, so normal updates keep it. The watcher is a backup, not the primary mechanism. Core Unraid services stay Never stop. “Stop whole app” is off by default, so one greedy process need not take every task with it.
 - **Useful limits, without restarts:** change a container's memory limit live and in its saved Unraid template. A too-tight limit is refused. A limit can still stop a process inside an app even if the host has spare RAM; separate swap caps depend on kernel support.
 - **Compressed swap and ZFS cache:** fixed or percentage-based zram size, compression and priorities; guarded resize/refresh; ARC size, target, maximum and hit rate. Existing labelled zram is adopted without draining it.
 - **Warnings and history:** available RAM, swap, kernel memory delays (PSI), OOM kills, RAM-backed files and top consumers. Unraid's own notification system delivers alerts. History is one sample per minute for up to 72 hours, capped at 16 MiB in RAM; it resets on reboot, without writing every sample to your flash drive.
 
 “Never stop” means excluded from the kernel's memory-kill choice, **not an absolute uptime guarantee**. Hardware faults, administrator actions and applications' own failures can still stop services. The kernel considers memory use as well as these preferences; this is not a rigid queue.
+
+### How priorities survive app updates
+
+The saved Unraid template owns a container’s priority through Docker’s built-in `--oom-score-adj` setting. Changing it protects the running app immediately and saves the template, without restarting it. Docker takes over for future processes at the next normal update/recreation. Until then, the watcher repairs differences and records what it fixed.
+
+**Use Docker default** removes the priority setting and uses Normal. Existing custom numeric priorities are preserved when changing other app options. Containers without a unique Unraid template show their Docker/Compose setting; edit them in the tool that owns them.
+
+Original reference, previous Headroom, light-theme comparisons and measured verification are in [the design evidence](docs/DESIGN.md#measured-verification). The original reference was rendered read-only; its services were not reinstalled.
 
 ### Sensible choices for this server
 
@@ -83,13 +91,13 @@ If the old plugin moved container processes into a host service's shared protect
 
 Changes are validated and serialized. Existing flash files are backed up before replacement. New memory limits leave at least 10% or 256 MiB above current usage. Swap evacuation needs available RAM for 125% of swapped pages plus the larger of 4 GiB or 10% of physical RAM, with low PSI. Disk swap must leave at least 2 GiB of disk space. An inactive disk-swap file is preserved until explicitly removed.
 
-The monitor follows Docker events and the kernel log, repairs core/VM/container protection every 15 seconds and has a native one-minute watchdog. Libvirt and array lifecycle hooks are installed by the plugin. No broad process-name matching is used across containers. Event and history storage is bounded; no log or history stream goes to flash.
+The monitor follows Docker events and the kernel log. Every 15 seconds it checks protection, but only rewrites container scores that differ from the saved native setting and records each repair. Core services and VMs use direct kernel protection. A native one-minute watchdog, libvirt and array lifecycle hooks are installed by the plugin. No broad process-name matching is used across containers. Event and history storage is bounded; no log or history stream goes to flash.
 
 Configuration and recovery values: `/boot/config/plugins/headroom/`. Runtime readings/history: `/tmp/headroom/`. Root and `/tmp` may share a RAM-backed filesystem; their totals must not be added together. Directory footprints exclude nested mounts and are sampled separately at low priority every five minutes.
 
 ## Remove or roll back
 
-Use **Plugins → Headroom → Remove**. Headroom refuses if active swap cannot safely return to RAM or an old container limit would be unsafe to restore. On refusal it restarts monitoring/protection and remains installed. Successful removal restores prior limits, ARC and swappiness, restores the owned PSI boot parameter, and removes its hooks/watchdog. Configuration, backups and inactive swap files are retained for recovery.
+Use **Plugins → Headroom → Remove**. Headroom refuses if active swap cannot safely return to RAM or an old container limit would be unsafe to restore. On refusal it restarts monitoring/protection and remains installed. Successful removal restores prior limits, owned template priorities, ARC and swappiness, restores the owned PSI boot parameter, and removes its hooks/watchdog. Configuration, backups and inactive swap files are retained for recovery.
 
 To return to John White's plugin:
 

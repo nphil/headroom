@@ -1,0 +1,281 @@
+{
+  "date": "2026-10-02",
+  "version": "2026.10.02.2",
+  "environment": "Actual Unraid 7.3.2 UI through the shared Chromium browser; existing live server workload",
+  "accessibility": [
+    {
+      "surface": "settings",
+      "width": 1440,
+      "theme": "black",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 1440,
+      "theme": "white",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 1440,
+      "theme": "azure",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 1440,
+      "theme": "gray",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 360,
+      "theme": "black",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 360,
+      "theme": "white",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 360,
+      "theme": "azure",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 360,
+      "theme": "gray",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 1440,
+      "theme": "black",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 1440,
+      "theme": "white",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 1440,
+      "theme": "azure",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 1440,
+      "theme": "gray",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 360,
+      "theme": "black",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 360,
+      "theme": "white",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 360,
+      "theme": "azure",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 360,
+      "theme": "gray",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 1440,
+      "theme": "black",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 1440,
+      "theme": "white",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 1440,
+      "theme": "azure",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 1440,
+      "theme": "gray",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 360,
+      "theme": "black",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 360,
+      "theme": "white",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 360,
+      "theme": "azure",
+      "violations": 0
+    },
+    {
+      "surface": "settings-expanded",
+      "width": 360,
+      "theme": "gray",
+      "violations": 0
+    },
+    {
+      "surface": "dashboard",
+      "width": 768,
+      "theme": "black",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 768,
+      "theme": "black",
+      "violations": 0
+    },
+    {
+      "surface": "settings",
+      "width": 1920,
+      "theme": "black",
+      "violations": 0
+    }
+  ],
+  "settings": {
+    "initializationToFirstLiveFrameMs": 139.60000038146973,
+    "fullNavigationToLiveFrameMs": 2409,
+    "navigation": [
+      {
+        "ttfb": 1334.0999994277954,
+        "domReady": 2271.300000190735,
+        "load": 2286.300000190735
+      }
+    ],
+    "clickToNextFrameMs": [
+      {
+        "control": "scope",
+        "nextFrameMs": 15.5
+      },
+      {
+        "control": "scope",
+        "nextFrameMs": 13.300000190734863
+      },
+      {
+        "control": "scope",
+        "nextFrameMs": 14.199999809265137
+      },
+      {
+        "control": "scope",
+        "nextFrameMs": 16.199999809265137
+      },
+      {
+        "control": "page",
+        "nextFrameMs": 17
+      },
+      {
+        "control": "page",
+        "nextFrameMs": 14
+      },
+      {
+        "control": "details",
+        "nextFrameMs": 4.899999618530273
+      },
+      {
+        "control": "details",
+        "nextFrameMs": 8.100000381469727
+      }
+    ],
+    "steadyPolls": [
+      {
+        "action": "status",
+        "networkAndDecodeMs": 7,
+        "toNextFrameMs": 11.09999942779541
+      },
+      {
+        "action": "status",
+        "networkAndDecodeMs": 26.09999942779541,
+        "toNextFrameMs": 11.5
+      }
+    ],
+    "pageErrors": []
+  },
+  "dashboard": {
+    "visible": {
+      "label": "visible",
+      "seconds": 17.002,
+      "taskCpuPercent": 60.38973061992707,
+      "scriptCpuPercent": 8.356187507352077,
+      "headroomRequests": [
+        {
+          "action": "status",
+          "durationMs": 44
+        }
+      ]
+    },
+    "collapsed": {
+      "label": "collapsed",
+      "seconds": 17.003,
+      "taskCpuPercent": 59.308816091278004,
+      "scriptCpuPercent": 8.035917191083927,
+      "headroomRequests": []
+    },
+    "keyboardCollapse": true,
+    "offscreen": {
+      "before": {
+        "hidden": false,
+        "bottom": -4495.421875
+      },
+      "requests": 0,
+      "afterHidden": false
+    },
+    "background": {
+      "requests": 0,
+      "hidden": true
+    },
+    "pollNote": "Next-frame timing, not isolated JavaScript execution. CPU is total native dashboard work per logical core; not an isolated Headroom benchmark."
+  },
+  "nativePriority": {
+    "recreatedFromUnraidTemplate": 500,
+    "execChild": 500,
+    "unraidUpdate": 500,
+    "restart": 500,
+    "watcherBlockedForRecreateProof": true,
+    "injectedDrift": 777,
+    "correctedDrift": 500,
+    "repairSeconds": 0.443,
+    "customFlagPreserved": 250,
+    "clearRemovesFlag": true,
+    "productionAppsRestarted": 0
+  },
+  "safety": {
+    "earlyStops": false,
+    "diskSwap": false,
+    "rebootPerformed": false,
+    "swapDrained": false
+  }
+}

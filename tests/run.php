@@ -105,4 +105,34 @@ test('early candidate excludes VMs, protected and unapproved apps',function(){
     $items=[$make('camera','docker','last',true,999),$make('host','proc','first',true,999),$make('vm','vm','first',true,999),$make('unapproved','docker','first',false,999),$make('small-first','docker','first',true,2),$make('large-first','docker','first',true,3),$make('big-normal','docker','normal',true,100)];
     same(early_candidate($items)['name'],'large-first'); same(early_candidate(array_slice($items,0,4)),null);
 });
+test('native priority replacement preserves flag-like labels and removes duplicates',function(){
+    $params='--label "--oom-score-adj=777" --memory=4G --oom-score-adj -500 --privileged --oom-score-adj=1000 -eNAME=value';
+    $result=priority_params($params,500);
+    same($result,'--label "--oom-score-adj=777" --memory=4G --privileged -eNAME=value --oom-score-adj=500');
+    same(priority_score($result),500);
+    same(priority_score(priority_params($result,null)),null);
+    same(priority_score('--oom-score-adj=-500 --oom-score-adj 0'),0);
+    same(priority_score('"--oom-score-adj"="-1000"'),-1000);
+    $expression='--hostname $(hostname -f) --label \'literal --oom-score-adj=42\' --oom-score-adj=-500';
+    same(priority_params($expression,500),'--hostname $(hostname -f) --label \'literal --oom-score-adj=42\' --oom-score-adj=500');
+    same(priority_score('--hostname "$(printf \'host name\')" --oom-score-adj=500'),500);
+    rejects(fn()=>priority_params('--label "unclosed',0));
+    rejects(fn()=>priority_score('--oom-score-adj=1001'));
+    rejects(fn()=>priority_score('--oom-score-adj=$(something)'));
+});
+test('template edits retain unrelated XML and priority when setting a memory cap',function(){
+    $old='<Container version="2"><Name>proof</Name><ExtraParams>--label &quot;a=b c&quot; --oom-score-adj=-500</ExtraParams><PostArgs>sleep 99</PostArgs></Container>';
+    $new=template_with_params($old,limit_params(template_params($old),512*MIB));
+    same(template_params($new),'--label "a=b c" --oom-score-adj=-500 --memory=536870912');
+    same(str_replace(' --memory=536870912','',$new),$old);
+    same(template_params(template_with_params('<Container><Name>x</Name><ExtraParams/></Container>','--oom-score-adj=500')),'--oom-score-adj=500');
+});
+test('native priority overrides stale saved level and protects custom negative scores',function(){
+    $c=validate(['items'=>['docker:camera'=>['level'=>'early','eligible'=>true]]]);
+    $p=docker_policy($c,'docker:camera',-500,'template');
+    same($p['score'],-500); same($p['level'],'last'); same($p['eligible'],false);
+    $p=docker_policy($c,'docker:camera',-123,'docker');
+    same($p['score'],-123); same($p['custom'],true); same($p['eligible'],false);
+    same(docker_policy($c,'docker:camera',0,'template')['level'],'normal');
+});
 echo "$passed passed, $failed failed\n"; exit($failed?1:0);

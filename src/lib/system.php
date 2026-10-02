@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 namespace Headroom;
-require_once __DIR__.'/config.php';
+require_once __DIR__.'/templates.php';
 // Linux's page-aligned unlimited sentinel. Docker's --memory 0 means 'leave unchanged'.
 const UNLIMITED_MEMORY = 9223372036854771712;
 
@@ -76,19 +76,23 @@ function docker_items(array $c): array {
     if (!file_exists('/var/run/docker.sock')) return [];
     $ids=preg_split('/\s+/',run(['docker','ps','-aq','--no-trunc']));
     if (!$ids || $ids===['']) return [];
-    $format='{"id":{{json .Id}},"name":{{json .Name}},"pid":{{.State.Pid}},"running":{{.State.Running}},"limit":{{.HostConfig.Memory}},"swap_limit":{{.HostConfig.MemorySwap}},"restart":{{json .HostConfig.RestartPolicy.Name}}}';
+    $format='{"id":{{json .Id}},"name":{{json .Name}},"pid":{{.State.Pid}},"running":{{.State.Running}},"limit":{{.HostConfig.Memory}},"swap_limit":{{.HostConfig.MemorySwap}},"native_score":{{.HostConfig.OomScoreAdj}},"restart":{{json .HostConfig.RestartPolicy.Name}}}';
     $rows=explode("\n",run(array_merge(['docker','inspect','--format',$format],$ids)));
-    $out=[];
+    $out=[]; $templates=template_index();
     foreach ($rows as $row) {
         $d=json_decode($row,true,32,JSON_THROW_ON_ERROR); $name=ltrim($d['name'],'/');
         $id='docker:'.$name; $cg=$d['running'] ? container_group($d['id'],(int)$d['pid']) : '';
+        $paths=$templates[$name]??[]; $hasTemplate=count($paths)===1;
+        $flag=$hasTemplate?priority_score(template_params((string)file_get_contents($paths[0]))):null;
+        $desired=$hasTemplate?($flag??0):(int)$d['native_score'];
         $out[$id]=['id'=>$id,'name'=>$name,'kind'=>'docker','state'=>$d['running']?'running':'stopped',
             'container_id'=>$d['id'],'pid'=>(int)$d['pid'],'cgroup'=>$cg,'usage'=>$cg?(int)text($cg.'/memory.current'):0,
             'limit'=>(int)$d['limit']>=UNLIMITED_MEMORY?0:(int)$d['limit'],'swap_limit'=>text($cg.'/memory.swap.max'),'restart'=>$d['restart'],
             'adj'=>$d['pid']?(int)text('/proc/'.$d['pid'].'/oom_score_adj'):null,
             'whole_actual'=>$cg?(int)text($cg.'/memory.oom.group'):null,
             'reserve_min'=>$cg?(int)text($cg.'/memory.min'):0,'reserve_low'=>$cg?(int)text($cg.'/memory.low'):0,
-            'policy'=>policy($c,$id),'pids'=>$cg?cgroup_pids($cg):[]];
+            'native_score'=>(int)$d['native_score'],'template_available'=>$hasTemplate,'template_priority'=>$flag,
+            'policy'=>docker_policy($c,$id,$desired,$hasTemplate?'template':'docker'),'pids'=>$cg?cgroup_pids($cg):[]];
     }
     return $out;
 }
@@ -141,7 +145,7 @@ function reservation_check(array $c, array $items): void {
 function reservation_parents(array $c, array $items): void {
     $wanted=[]; $baseline=json_file(RUN.'/reservation-parents.json');
     foreach ($items as $id=>$item) {
-        $p=policy($c,$id); if (!$item['cgroup'] || !$p['reserve_mib']) continue;
+        $p=$item['kind']==='docker'?$item['policy']:policy($c,$id); if (!$item['cgroup'] || !$p['reserve_mib']) continue;
         $field=$p['level']==='never'?'memory.min':'memory.low';
         for ($parent=dirname($item['cgroup']); str_starts_with($parent,'/sys/fs/cgroup/'); $parent=dirname($parent)) {
             $path=$parent.'/'.$field; $wanted[$path]=($wanted[$path]??0)+$p['reserve_mib']*MIB;
@@ -152,17 +156,18 @@ function reservation_parents(array $c, array $items): void {
     foreach ($baseline as $path=>$original) if (is_file($path)) write_kernel($path,max($original,$wanted[$path]??0));
 }
 function apply_policy(array $c, ?array $items=null): array {
-    $items ??= inventory($c); reservation_check($c,$items); $errors=[]; $changed=0;
+    $items ??= inventory($c); reservation_check($c,$items); $errors=[]; $changed=0; $repairs=[];
     try { reservation_parents($c,$items); } catch (\Throwable $e) { $errors[]=$e->getMessage(); }
     foreach ($items as $id=>$item) {
         if ($item['kind']==='docker' && $item['state']==='running' && !$item['cgroup']) { $errors[]=$id.': container control group could not be verified.'; continue; }
-        $p=policy($c,$id); $score=LEVELS[$p['level']];
+        $p=$item['kind']==='docker'?$item['policy']:policy($c,$id); $score=$p['score']??LEVELS[$p['level']];
         foreach ($item['pids'] as $pid) {
             // Recheck identity's cgroup before writing a PID that may have exited.
             if (!is_file('/proc/'.$pid.'/oom_score_adj')) continue;
             if ($item['cgroup'] && !str_starts_with(cgroup($pid).'/',$item['cgroup'].'/')) continue;
             if ($item['kind']==='proc' && (text('/proc/'.$pid.'/comm')!==$item['name'] || @readlink('/proc/'.$pid.'/ns/pid')!==@readlink('/proc/1/ns/pid'))) continue;
-            try { write_kernel('/proc/'.$pid.'/oom_score_adj',$score); $changed++; }
+            if((int)text('/proc/'.$pid.'/oom_score_adj')===$score) continue;
+            try { write_kernel('/proc/'.$pid.'/oom_score_adj',$score); $changed++; if($item['kind']==='docker') $repairs[$item['name']]=($repairs[$item['name']]??0)+1; }
             catch (\Throwable $e) { if (is_dir('/proc/'.$pid)) $errors[]=$id.': '.$e->getMessage(); }
         }
         $cg=$item['cgroup'];
@@ -173,29 +178,7 @@ function apply_policy(array $c, ?array $items=null): array {
             write_kernel($cg.'/memory.low',$p['level']==='last'?$p['reserve_mib']*MIB:0);
         } catch (\Throwable $e) { if (is_dir($cg)) $errors[]=$id.': '.$e->getMessage(); }
     }
-    return ['processes'=>$changed,'errors'=>$errors];
-}
-function limit_params(string $params, int $bytes): string {
-    // Preserve raw shell words, including quoted values belonging to unrelated flags.
-    preg_match_all('/(?:[^\s\'"\\\\]+|\'[^\']*\'|"(?:\\\\.|[^"\\\\])*"|\\\\.)+/', $params,$matches);
-    $words=$matches[0]; $keep=[];
-    for ($i=0;$i<count($words);$i++) {
-        $w=trim($words[$i],"\"'");
-        if ($w==='--memory' || $w==='-m') { if (!isset($words[$i+1])) throw new \InvalidArgumentException('Existing memory flag has no value.'); $i++; continue; }
-        if (preg_match('/^(--memory=|-m[0-9])/', $w)) continue;
-        $keep[]=$words[$i];
-    }
-    if ($bytes>0) $keep[]='--memory='.$bytes;
-    return implode(' ',$keep);
-}
-function template_for(string $name): string {
-    $found=[]; libxml_use_internal_errors(true);
-    foreach (glob('/boot/config/plugins/dockerMan/templates-user/*.xml')?:[] as $path) {
-        $xml=simplexml_load_file($path,'SimpleXMLElement',LIBXML_NONET);
-        if ($xml && (string)$xml->Name===$name) $found[]=$path;
-    }
-    if (count($found)!==1) throw new \RuntimeException('Expected one saved Unraid template for '.$name.'. Save it in the Docker tab first.');
-    return $found[0];
+    return ['processes'=>$changed,'repairs'=>$repairs,'errors'=>$errors];
 }
 function update_memory(string $id, int $bytes): void {
     $args=['docker','update','--memory',(string)($bytes?:UNLIMITED_MEMORY)];
@@ -217,10 +200,7 @@ function set_limit(string $name, int $bytes): void {
     $path=template_for($name); $old=(string)file_get_contents($path);
     $xml=simplexml_load_string($old,'SimpleXMLElement',LIBXML_NONET);
     $params=limit_params((string)$xml->ExtraParams,$bytes);
-    $node='<ExtraParams>'.htmlspecialchars($params,ENT_XML1|ENT_QUOTES,'UTF-8').'</ExtraParams>';
-    if (preg_match('#<ExtraParams(?:\s[^>]*)?>.*?</ExtraParams>|<ExtraParams\s*/>#s',$old)) {
-        $new=preg_replace_callback('#<ExtraParams(?:\s[^>]*)?>.*?</ExtraParams>|<ExtraParams\s*/>#s',fn()=>$node,$old,1);
-    } else { $new=str_replace('</Container>','  '.$node."\n</Container>",$old); }
+    $new=template_with_params($old,$params);
     if ($new===$old && $item['limit']===$bytes) return;
     if (!simplexml_load_string($new,'SimpleXMLElement',LIBXML_NONET)) throw new \RuntimeException('Template validation failed.');
     $backup=backup($path);
@@ -266,16 +246,17 @@ function public_items(array $items): array {
     foreach ($items as &$item) unset($item['pids'],$item['cgroup'],$item['container_id'],$item['pid']);
     unset($item); return $items;
 }
-function explain(array $c, array $sample): string {
+function explain(array $c, array $sample, array $items): string {
     $early=[]; $last=[]; $never=[];
-    foreach ($c['items'] as $id=>$p) {
+    foreach ($items as $id=>$item) {
+        $p=$item['policy'];
         if (str_starts_with($id,'proc:')) continue;
-        if (LEVELS[$p['level']]>=500) $early[]=substr($id,strpos($id,':')+1);
+        if (($p['score']??LEVELS[$p['level']])>0) $early[]=substr($id,strpos($id,':')+1);
         if ($p['level']==='last') $last[]=substr($id,strpos($id,':')+1);
         if ($p['level']==='never') $never[]=substr($id,strpos($id,':')+1);
     }
     $text='About '.round(($sample['available']??0)/GIB,1).' GiB is available now. ';
-    $text.=($early?implode(', ',$early).' may be stopped before unlisted apps. ':'Unlisted apps use '.$c['default_level'].' priority. ');
+    $text.=($early?implode(', ',$early).' may be stopped before normal-priority apps. ':'Containers follow their native Docker priority; no flag means Normal. ');
     if ($last) $text.=implode(', ',$last).' are preferred to keep running. ';
     $text.='Core Unraid services'.($never?' and '.implode(', ',$never):'').' are excluded from memory kills. These are preferences, not a guaranteed order. App limits still apply. ';
     return $text.($c['act_early']?'Early action is enabled only for apps you explicitly allowed.':'Headroom will not proactively stop apps; early action is off.');

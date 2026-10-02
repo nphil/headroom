@@ -58,6 +58,7 @@ function install(): array {
         save_config($c);
     }
     $c=config(); $dev=configure_zram($c,false);
+    migrate_native_priorities($c);
     write_kernel('/proc/sys/vm/swappiness',$c['swappiness']);
     if ($legacy) { $moved=restore_legacy_memberships(inventory($c)); if($moved) event('migration','Returned '.$moved.' container processes misplaced by the legacy plugin to their own Docker control groups. Host services were not moved.'); }
     $applied=apply_policy($c);
@@ -99,6 +100,12 @@ function uninstall(): void {
         backup($path); update_memory($items['docker:'.$name]['container_id'],(int)$old['limit']); atomic($path,$new,0644);
     }
     foreach ($targets as $path) safe_swapoff($path);
+    foreach($restore['priorities']??[] as $name=>$score) {
+        if(!isset(template_index()[$name])) continue;
+        $path=template_for($name); $content=(string)file_get_contents($path);
+        atomic($path,template_with_params($content,priority_params(template_params($content),$score)),0644);
+    }
+    $restoredDocker=docker_items($c);
     if ($dev) run(['zramctl','--reset',$dev]);
     write_kernel('/proc/sys/vm/swappiness',$restore['swappiness']??60);
     if (isset($restore['arc_max']) && is_file('/sys/module/zfs/parameters/zfs_arc_max')) write_kernel('/sys/module/zfs/parameters/zfs_arc_max',$restore['arc_max']);
@@ -112,7 +119,7 @@ function uninstall(): void {
         foreach ($i['pids'] as $pid) if (is_file('/proc/'.$pid.'/oom_score_adj')) {
             if ($i['cgroup'] && !str_starts_with(cgroup($pid).'/',$i['cgroup'].'/')) continue;
             if ($i['kind']==='proc' && text('/proc/'.$pid.'/comm')!==$i['name']) continue;
-            write_kernel('/proc/'.$pid.'/oom_score_adj',0);
+            write_kernel('/proc/'.$pid.'/oom_score_adj',$i['kind']==='docker'?($restoredDocker[$i['id']]['policy']['score']??0):0);
         }
         if ($i['cgroup']) foreach (['memory.min','memory.low','memory.oom.group'] as $field) if (is_file($i['cgroup'].'/'.$field)) write_kernel($i['cgroup'].'/'.$field,0);
     }

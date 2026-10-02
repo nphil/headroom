@@ -31,18 +31,33 @@ try {
     if (strlen($raw)>65536) respond(['ok'=>false,'error'=>'Request too large.'],413);
     $body=json_decode($raw,true,32,JSON_THROW_ON_ERROR);
     if (!is_array($body)) throw new \InvalidArgumentException('Expected an object.');
-    $message=locked(function()use($action,$body){
+    $response=locked(function()use($action,$body){
         $old=config(); $new=$old;
-        if ($action==='policy') {
+        if ($action==='policy' || $action==='priority-clear') {
             $id=$body['id']??'';
-            if (!is_string($id)||!valid_id($id)||!is_array($body['policy']??null)) throw new \InvalidArgumentException('Choose a valid app.');
-            $new['items'][$id]=$body['policy']; $new=validate($new); $items=inventory($old);
+            if (!is_string($id)||!valid_id($id)) throw new \InvalidArgumentException('Choose a valid app.');
+            if($action==='priority-clear') {
+                if(!str_starts_with($id,'docker:')) throw new \InvalidArgumentException('Only containers have a native Docker flag.');
+                $body['policy']=array_replace(policy($old,$id),['level'=>'normal','reserve_mib'=>0]);
+            }
+            if(!is_array($body['policy']??null)) throw new \InvalidArgumentException('Choose a memory preference.');
+            $items=inventory($old);
             if (!isset($items[$id])) throw new \InvalidArgumentException('App or service is no longer present.');
-            reservation_check($new,$items);
-            $result=apply_policy($new,$items);
-            if ($result['errors']) { apply_policy($old,$items); throw new \RuntimeException(implode('; ',$result['errors'])); }
-            try { save_config($new); } catch (\Throwable $e) { apply_policy($old,$items); throw $e; }
-            $message=$items[$id]['name'].': '.LABELS[$new['items'][$id]['level']].'. Protection saved and applied.';
+            $keepNative=($body['policy']['level']??'')==='custom' && $items[$id]['kind']==='docker' && $items[$id]['policy']['custom'];
+            $new['items'][$id]=$body['policy'];
+            if($keepNative) $new['items'][$id]['level']=$items[$id]['policy']['level'];
+            $new=validate($new);
+            reservation_check($new,$items); $template=null;
+            try {
+                if($items[$id]['kind']==='docker' && !$keepNative) $template=set_template_priority($items[$id]['name'],$action==='priority-clear'?null:LEVELS[$new['items'][$id]['level']]);
+                $result=apply_policy($new);
+                if($result['errors']) throw new \RuntimeException(implode('; ',$result['errors']));
+                save_config($new);
+            } catch(\Throwable $e) {
+                if($template && $template['changed']) atomic($template['path'],$template['old'],0644);
+                apply_policy($old); throw $e;
+            }
+            $message=$items[$id]['name'].': '.($keepNative?'Custom priority kept':LABELS[$new['items'][$id]['level']]).'. Applied live'.($template?' and saved in its native Unraid template. No restart.':'.');
         } elseif ($action==='forget') {
             $id=(string)($body['id']??''); if(!valid_id($id)) throw new \InvalidArgumentException('Invalid app.');
             if(isset(inventory($old)[$id])) throw new \RuntimeException('This app still exists. Set its preference instead.');
@@ -81,8 +96,12 @@ try {
         } elseif ($action==='notify-test') {
             notify('Headroom test','Test notification delivered by the normal Unraid notification system. No apps were stopped.','normal'); $message='Test sent through Unraid notifications.';
         } else { throw new \InvalidArgumentException('Unknown action.'); }
-        event('settings',$message); return $message;
+        event('settings',$message); $reply=['message'=>$message];
+        if(in_array($action,['policy','priority-clear','limit'],true)) {
+            $reply['inventory']=['items'=>public_items(inventory(config())),'updated'=>microtime(true)];
+        }
+        return $reply;
     });
-    respond(['ok'=>true,'message'=>$message]);
+    respond(['ok'=>true]+$response);
 } catch (\InvalidArgumentException|\JsonException $e) { respond(['ok'=>false,'error'=>$e->getMessage()],400); }
 catch (\Throwable $e) { respond(['ok'=>false,'error'=>$e->getMessage()],409); }

@@ -7,32 +7,28 @@ function settings_ui(string $csrf): string {
     ob_start(); ?>
 <link rel="stylesheet" href="/plugins/headroom/headroom.css?v=<?=asset_version('headroom.css')?>">
 <div class="hr" data-headroom="settings" data-csrf="<?=htmlspecialchars($csrf,ENT_QUOTES,'UTF-8')?>">
-  <div class="hr-status"><h2 data-health>Checking memory</h2><span data-updated>Waiting for the first sample</span></div>
-  <div data-error role="alert" hidden></div>
-  <div data-feedback role="status" aria-live="polite"></div>
-  <div class="hr-stats" data-stats></div>
-  <details class="hr-explain" open><summary>Explain my server</summary><p data-explain></p></details>
-  <nav class="hr-jump" aria-label="Headroom sections"><a href="#hr-protection">Memory protection</a><a href="#hr-swap">Swap &amp; ZFS</a><a href="#hr-alerts">Monitoring</a><a href="#hr-activity">Activity</a></nav>
-  <section aria-labelledby="hr-history-title">
-    <div class="hr-section-title"><h3 id="hr-history-title">Memory over time</h3><div class="hr-inline">
-      <label>Show <select data-metric><option value="ram_used">RAM in use</option><option value="zram_ram">Compressed swap RAM cost</option><option value="swap_used">All swap in use</option><option value="disk_used">Disk swap in use</option><option value="arc_size">ZFS cache</option><option value="psi_some">Waiting for RAM: some</option><option value="psi_full">Waiting for RAM: all</option><option value="top">Top containers</option></select></label>
-      <label>Period <select data-hours><option value="1">Last hour</option><option value="24" selected>Last 24 hours</option><option value="72">Last 3 days</option></select></label></div></div>
-    <div data-chart class="hr-chart"></div><p data-chart-summary class="hr-help"></p>
-    <p class="hr-help">One point per minute. Up to 3 days kept in RAM, not on your flash drive. History starts again after a reboot. Waiting for RAM (PSI) measures delays, not how full RAM is.</p>
+  <div class="hr-heading"><div><h2>Memory overview</h2><p class="hr-subtitle">Room for your apps. Protection for your server.</p></div><span class="hr-health" data-health>Checking memory</span></div>
+  <div data-error role="alert" hidden></div><div data-feedback role="status" aria-live="polite"></div>
+  <div class="hr-stats" data-stats aria-label="Live memory overview"></div>
+  <div class="hr-overview-bottom">
+    <section class="hr-panel hr-history" aria-labelledby="hr-history-title">
+      <div class="hr-panel-heading"><h3 id="hr-history-title">Memory over time</h3><div class="hr-inline">
+        <label><span class="hr-sr">History metric</span><select data-metric><option value="available">Available RAM</option><option value="ram_used">RAM in use</option><option value="zram_ram">Compressed RAM cost</option><option value="swap_used">Swap in use</option><option value="disk_used">Disk swap</option><option value="arc_size">ZFS cache</option><option value="psi_some">Waiting for RAM: some</option><option value="psi_full">Waiting for RAM: all</option><option value="top">Top apps</option></select></label>
+        <label><span class="hr-sr">History period</span><select data-hours><option value="1" selected>1 hour</option><option value="24">24 hours</option><option value="72">3 days</option></select></label>
+      </div></div><div data-chart class="hr-chart"></div><p data-chart-summary class="hr-help"></p>
+    </section>
+    <aside class="hr-panel hr-summary"><div class="hr-panel-heading"><h3>Your protection plan</h3><i class="fa fa-shield" aria-hidden="true"></i></div><div data-plan></div><details><summary>Explain my server</summary><p data-explain></p></details></aside>
+  </div>
+  <section id="hr-protection" class="hr-panel" aria-labelledby="hr-protection-title">
+    <div class="hr-panel-heading"><div><h3 id="hr-protection-title">Memory protection</h3><p class="hr-help">Choose what gives way first if memory runs out. App limits still apply.</p></div><label class="hr-filter"><span class="hr-sr">Find an app</span><input type="search" data-filter placeholder="Find an app…" autocomplete="off"></label></div>
+    <div class="hr-list-toolbar"><div class="hr-scopes" role="group" aria-label="Show applications"><button type="button" data-scope="docker" aria-pressed="true">Apps <span data-count="docker"></span></button><button type="button" data-scope="custom" aria-pressed="false">Priority set <span data-count="custom"></span></button><button type="button" data-scope="vm" aria-pressed="false">VMs <span data-count="vm"></span></button><button type="button" data-scope="proc" aria-pressed="false">Core services</button></div><details class="hr-level-guide"><summary>What do the levels mean?</summary><p><b>Never stop:</b> excluded from memory kills. <b>Stop last:</b> preferred to keep. <b>Normal:</b> usual choice. <b>Stop early:</b> more expendable. <b>Stop first:</b> most expendable. Memory use also affects the kernel's choice.</p></details></div>
+    <div class="hr-table-head" aria-hidden="true"><span>Application</span><span>Memory in use</span><span>When memory runs out</span><span></span></div>
+    <div data-apps></div><p data-empty hidden>No matching apps.</p>
+    <div class="hr-pager"><span data-page-info></span><div><button type="button" data-page="-1" aria-label="Previous apps">Previous</button><button type="button" data-page="1" aria-label="Next apps">Next</button></div></div>
+    <p class="hr-list-note">Container priorities live in their Unraid templates. Changes work now, survive updates, and never restart an app. <span data-updated></span></p>
+    <details class="hr-absent"><summary>Saved preferences for removed apps</summary><div data-absent></div></details>
   </section>
-  <section id="hr-protection" aria-labelledby="hr-protection-title">
-    <h3 id="hr-protection-title">Memory protection</h3>
-    <p>If memory runs out, tell Unraid what it may stop first. A limit can still stop a process inside an app even when the server has spare RAM.</p>
-    <div class="hr-level-help"><b>Never stop</b> excluded from memory kills. <b>Stop last</b> preferred to keep. <b>Normal</b> usual choice. <b>Stop early</b> more expendable. <b>Stop first</b> most expendable. Memory use also affects the kernel's choice.</div>
-    <label class="hr-filter">Find an app <input type="search" data-filter placeholder="Filter by name" autocomplete="off"></label>
-    <div data-apps></div>
-    <details><summary>Virtual machines</summary><div data-vms></div></details>
-    <details><summary>Core Unraid services — always Never stop</summary><p class="hr-help">Exact host process names only. Container processes are not mistaken for host services. New service processes are checked every 15 seconds.</p><div data-services></div></details>
-    <details><summary>Saved preferences for absent apps</summary><div data-absent></div></details>
-    <p class="hr-help">“Whole app” is off by default: the kernel may stop only the memory-hungry process. Turning it on may end every chat or camera task in that app. Reservations are an optional reclaim shield, not extra RAM: MiB for Never stop is a hard floor; Stop last is best-effort. Combined reservations cannot exceed 25% of RAM.</p>
-  </section>
-  <section id="hr-swap" aria-labelledby="hr-swap-title">
-    <h3 id="hr-swap-title">Swap &amp; ZFS cache</h3>
+  <details id="hr-swap" class="hr-panel hr-advanced"><summary><span>Swap &amp; ZFS cache</span><small>Compressed memory, cache limits &amp; safe tools</small></summary>
     <div class="hr-columns">
       <form data-form="zram"><fieldset><legend>Compressed swap (zram)</legend><p data-zram-live></p>
         <label><input name="zram_enabled" type="checkbox"> Enable compressed swap</label><p class="hr-help">Stores inactive memory compressed in RAM. It does not create physical RAM.</p>
@@ -59,8 +55,8 @@ function settings_ui(string $csrf): string {
       </fieldset></form>
       <fieldset><legend>Refresh swap safely</legend><p>Move swapped data back to RAM and leave swap ready for the next burst. This is not a fix for a leaking app.</p><p class="hr-help">Requires free RAM for 125% of swapped data plus the larger of 4 GiB or 10% of physical RAM, and low memory waiting time.</p><button type="button" data-action="refresh">Refresh swap</button></fieldset>
     </div>
-  </section>
-  <section id="hr-alerts" aria-labelledby="hr-alert-title"><h3 id="hr-alert-title">Monitoring &amp; early warnings</h3>
+  </details>
+  <details id="hr-alerts" class="hr-panel hr-advanced"><summary><span>Monitoring &amp; early warnings</span><small>Notifications, pressure statistics &amp; RAM disks</small></summary>
     <form data-form="psi"><fieldset><legend>Kernel pressure statistics</legend><p data-psi-note></p><label><input name="psi_enabled" type="checkbox"> Enable pressure statistics after the next reboot</label><p class="hr-help">Measures time spent waiting for memory. Changes only psi= in the default Unraid boot entry. RAM, swap and memory-kill alerts work before then. Headroom never restarts your server.</p><button type="submit">Save next-boot setting</button></fieldset></form><br>
     <form data-form="alerts"><div class="hr-columns">
       <fieldset><legend>When to warn</legend>
@@ -72,7 +68,7 @@ function settings_ui(string $csrf): string {
         <label>Swap warning at (%) <input name="swap_percent" type="number" min="50" max="99" required></label>
         <label>RAM-disk growth in 5 minutes (MiB) <input name="ramdisk_growth_mib" type="number" min="64" max="8192" required></label>
         <label>Keep history (hours) <input name="history_hours" type="number" min="1" max="72" required></label>
-        <label>Unlisted apps <select name="default_level"><option value="normal">Normal</option><option value="early">Stop early</option><option value="first">Stop first</option></select></label><p class="hr-help">New or recreated apps inherit this preference automatically unless you gave them their own.</p>
+        <label>Unlisted VMs and non-core services <select name="default_level"><option value="normal">Normal</option><option value="early">Stop early</option><option value="first">Stop first</option></select></label><p class="hr-help">Containers use their native Docker template priority. With no priority flag, Docker uses Normal.</p>
       </fieldset>
       <fieldset><legend>Act early — optional</legend><label><input name="act_early" type="checkbox"> Request a graceful app stop before a hard memory kill</label>
         <p class="hr-warning">Off by default. This can interrupt work. It only chooses apps you also marked “Allow early stop” in their protection row. Never stop, Stop last, virtual machines and core services are excluded.</p>
@@ -82,13 +78,13 @@ function settings_ui(string $csrf): string {
         <button type="button" data-action="notify-test">Send test notification</button>
       </fieldset></div><button type="submit">Save monitoring settings</button>
     </form>
-  </section>
-  <section id="hr-activity" aria-labelledby="hr-activity-title"><div class="hr-section-title"><h3 id="hr-activity-title">Recent activity</h3><button type="button" data-action="events">Refresh activity</button></div><div data-events tabindex="0" role="region" aria-label="Recorded memory activity"></div></section>
+  </details>
+  <details id="hr-activity" class="hr-panel hr-advanced"><summary><span>Recent activity</span><small>Alerts, memory kills &amp; automatic repairs</small></summary><button type="button" data-action="events">Refresh activity</button><div data-events tabindex="0" role="region" aria-label="Recorded memory activity"></div></details>
   <p class="hr-footer">Headroom <?=VERSION?> · <a href="https://github.com/nphil/headroom" target="_blank" rel="noopener">Project &amp; help</a> · Inspired by John White's unraid-plg-zram, used with permission.</p>
 </div><script src="/plugins/headroom/headroom.js?v=<?=asset_version('headroom.js')?>" defer></script>
 <?php return ob_get_clean(); }
 function dashboard_ui(string $csrf): string {
     ob_start(); ?>
-<tbody title="Headroom memory management"><tr><td><span class="tile-header hr-tile-header"><span class="tile-header-left"><i class="icon-ram f32" aria-hidden="true"></i><div class="section"><h3 class="tile-header-main">HEADROOM</h3><span class="subtitle">Memory management</span></div></span><span class="tile-header-right"><span class="tile-header-right-controls"><a href="/Settings/Headroom" title="Headroom settings"><i class="fa fa-fw fa-cog control" aria-hidden="true"></i><span class="hr-sr">Headroom settings</span></a></span></span></span></td></tr>
-<tr><td><link rel="stylesheet" href="/plugins/headroom/headroom.css?v=<?=asset_version('headroom.css')?>"><div class="hr hr-tile" data-headroom="tile" data-csrf="<?=htmlspecialchars($csrf,ENT_QUOTES,'UTF-8')?>"><strong data-health>Checking memory</strong><div data-error role="alert" hidden></div><div class="hr-stats" data-stats></div><h4>Available RAM · last hour</h4><div data-chart class="hr-chart"></div><p data-chart-summary class="hr-help"></p><span data-updated></span></div><script src="/plugins/headroom/headroom.js?v=<?=asset_version('headroom.js')?>" defer></script></td></tr></tbody>
+<tbody title="Headroom memory management"><tr><td><span class="tile-header hr-tile-header"><span class="tile-header-left"><i class="icon-ram f32" aria-hidden="true"></i><div class="section"><h3 class="tile-header-main">Headroom</h3><span class="subtitle">Memory &amp; protection</span></div></span><span class="tile-header-right"><span class="tile-header-right-controls"><a href="/Settings/Headroom" title="Headroom settings" aria-label="Headroom settings"><i class="fa fa-fw fa-cog control" aria-hidden="true"></i></a></span></span></span></td></tr>
+<tr><td><link rel="stylesheet" href="/plugins/headroom/headroom.css?v=<?=asset_version('headroom.css')?>"><div class="hr hr-tile" data-headroom="tile" data-csrf="<?=htmlspecialchars($csrf,ENT_QUOTES,'UTF-8')?>"><div class="hr-tile-status"><span class="hr-health" data-health>Checking memory</span><span data-pressure></span></div><div data-error role="alert" hidden></div><div class="hr-stats" data-stats></div><div class="hr-spark-heading"><span>Available RAM</span><span>Last hour</span></div><div data-chart class="hr-chart"></div><p data-chart-summary class="hr-sr"></p><div class="hr-top-apps" data-top-apps></div><span class="hr-sr" data-updated></span></div><script src="/plugins/headroom/headroom.js?v=<?=asset_version('headroom.js')?>" defer></script></td></tr></tbody>
 <?php return ob_get_clean(); }

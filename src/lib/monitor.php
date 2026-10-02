@@ -107,8 +107,8 @@ function ramdisk_footprints(): array {
     return $out;
 }
 function early_candidate(array $items): ?array {
-    $eligible=array_filter($items,fn($i)=>$i['kind']==='docker' && $i['state']==='running' && $i['policy']['eligible'] && LEVELS[$i['policy']['level']]>=0);
-    usort($eligible,fn($a,$b)=>(LEVELS[$b['policy']['level']]<=>LEVELS[$a['policy']['level']]) ?: ($b['usage']<=>$a['usage']));
+    $eligible=array_filter($items,fn($i)=>$i['kind']==='docker' && $i['state']==='running' && $i['policy']['eligible'] && ($i['policy']['score']??LEVELS[$i['policy']['level']])>=0);
+    usort($eligible,fn($a,$b)=>(($b['policy']['score']??LEVELS[$b['policy']['level']])<=>($a['policy']['score']??LEVELS[$a['policy']['level']])) ?: ($b['usage']<=>$a['usage']));
     return $eligible[0]??null;
 }
 function monitor_tick(array $s, array $c, array $items): array {
