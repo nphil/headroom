@@ -5,7 +5,7 @@ Native Unraid memory controls with a compact, theme-aware interface. New RAM, co
 ]]></CHANGES>
 <FILE Name="/boot/config/plugins/headroom/headroom-2026.10.02.2.tar.gz">
 <URL>https://github.com/nphil/headroom/releases/download/2026.10.02.2/headroom-2026.10.02.2.tar.gz</URL>
-<MD5>8d48ecf7f5ef847f194d6759d4f5a14e</MD5>
+<MD5>48e5a2cec256b4b1f4a6d5b67ab5c590</MD5>
 </FILE>
 <FILE Name="/tmp/headroom-install-2026.10.02.2" Run="/bin/bash"><INLINE><![CDATA[
 #!/bin/bash
@@ -15,7 +15,7 @@ archive=/boot/config/plugins/headroom/headroom-2026.10.02.2.tar.gz
 stage=$(mktemp -d /tmp/headroom-install.XXXXXX)
 cleanup() { rm -rf -- "$stage"; rm -f -- /tmp/headroom-install-2026.10.02.2; }
 trap cleanup EXIT
-printf '%s  %s\n' 'fd8b47a565832caa1c8df688a8a7b971297a3dd8191ff09d973aeea16da194c3' "$archive" | sha256sum -c -
+printf '%s  %s\n' 'bc7ab7bc64bc86ac53566ba47bbac64aa2a821e913d81a1ae272a97a9b7abd3f' "$archive" | sha256sum -c -
 mkdir "$stage/new"
 tar --no-same-owner -xzf "$archive" -C "$stage/new"
 for file in cli.php daemon.php lib/config.php lib/system.php lib/templates.php lib/monitor.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
