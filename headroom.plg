@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PLUGIN name="headroom" author="Nitin Philip" version="2026.10.02.1" launch="Settings/Headroom" pluginURL="https://raw.githubusercontent.com/nphil/headroom/main/headroom.plg" min="7.0.0" support="https://github.com/nphil/headroom/issues" icon="headroom.svg">
+<CHANGES><![CDATA[## 2026.10.02.1
+Native Unraid memory protection with automatic Docker/VM/service reapplication; per-app whole-container stopping is off by default. Safe adoption of existing compressed swap, guarded resize and refresh, non-ZFS disk swap support, live template-persistent memory limits, ZFS ARC controls, native warnings, OOM reporting and bounded RAM history. Desktop and phone Settings and Dashboard views, owned PSI boot setting, safe migration and clean removal. Based on / inspired by unraid-plg-zram by John White, used with permission.
+]]></CHANGES>
+<FILE Name="/boot/config/plugins/headroom/headroom-2026.10.02.1.tar.gz">
+<URL>https://github.com/nphil/headroom/releases/download/2026.10.02.1/headroom-2026.10.02.1.tar.gz</URL>
+<MD5>a36a78c055921a8333aff148003019e4</MD5>
+</FILE>
+<FILE Name="/tmp/headroom-install-2026.10.02.1" Run="/bin/bash"><INLINE><![CDATA[
+#!/bin/bash
+set -euo pipefail
+root=/usr/local/emhttp/plugins/headroom
+archive=/boot/config/plugins/headroom/headroom-2026.10.02.1.tar.gz
+stage=$(mktemp -d /tmp/headroom-install.XXXXXX)
+cleanup() { rm -rf -- "$stage"; rm -f -- /tmp/headroom-install-2026.10.02.1; }
+trap cleanup EXIT
+printf '%s  %s\n' 'd8791f2963fa0f768465e368c09e25dc9454b08c110f1939808b017d159b9c4c' "$archive" | sha256sum -c -
+mkdir "$stage/new"
+tar --no-same-owner -xzf "$archive" -C "$stage/new"
+for file in cli.php daemon.php lib/config.php lib/system.php lib/monitor.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
+  [[ -s "$stage/new/$file" ]] || { echo "Headroom package is incomplete: $file" >&2; exit 1; }
+done
+for file in "$stage/new"/*.php "$stage/new"/lib/*.php; do php -l "$file" >/dev/null; done
+# PHP variables are intentionally quoted for the PHP interpreter.
+# shellcheck disable=SC2016
+php -r 'foreach (["sqlite3","pcntl","posix","simplexml"] as $ext) if (!extension_loaded($ext)) { fwrite(STDERR,"Missing PHP extension: $ext\n"); exit(1); }'
+chmod -R a+rX "$stage/new"
+chmod 755 "$stage/new/rc.headroom" "$stage/new/cli.php" "$stage/new/daemon.php" "$stage/new/event/"*
+# Back up the previous installer before the native plugin manager replaces it.
+# shellcheck disable=SC2016
+php -r 'require $argv[1]; \Headroom\backup("/boot/config/plugins/headroom.plg");' "$stage/new/lib/config.php"
+if [[ -x "$root/rc.headroom" ]]; then "$root/rc.headroom" stop; fi
+if [[ -d "$root" ]]; then mv "$root" "$stage/previous"; fi
+mv "$stage/new" "$root"
+if ! php "$root/cli.php" install; then
+  # Preserve functional code and re-apply protection even if migration paused.
+  "$root/rc.headroom" start
+  echo 'Headroom install needs attention. Saved backups and protections were retained.' >&2
+  exit 1
+fi
+"$root/rc.headroom" start
+echo 'Headroom 2026.10.02.1 installed. Open Settings > Headroom. No server or app was restarted.'
+]]></INLINE></FILE>
+<FILE Name="/tmp/headroom-remove-2026.10.02.1" Run="/bin/bash" Method="remove"><INLINE><![CDATA[
+#!/bin/bash
+set -euo pipefail
+root=/usr/local/emhttp/plugins/headroom
+trap 'rm -f /tmp/headroom-remove-2026.10.02.1' EXIT
+"$root/rc.headroom" stop
+if ! php "$root/cli.php" uninstall; then
+  # A refused evacuation must not leave monitoring/protection switched off.
+  php "$root/cli.php" install || true
+  "$root/rc.headroom" start
+  echo 'Headroom was NOT removed. Read the safety reason above and try again later.' >&2
+  exit 1
+fi
+rm -rf -- "$root"
+echo 'Headroom removed. Prior settings restored; saved configuration, backups and inactive disk-swap files retained.'
+]]></INLINE></FILE>
+</PLUGIN>

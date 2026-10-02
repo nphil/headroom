@@ -1,0 +1,11 @@
+Headroom is inspired by / based on unraid-plg-zram by John White,
+used with the author's permission.
+Reference project: https://github.com/johnpwhite/unraid-plg-zram
+
+Headroom is an independently implemented plugin. The reference informed its
+Unraid integration, compressed-swap lifecycle, and migration compatibility.
+John White's original plugin and its contributors deserve credit for that work.
+No bundled Chart.js, original application implementation, or Unraid theme
+assets are redistributed as Headroom source. Unraid's native theme and fonts
+are used from the installed host. MIT covers the new Headroom implementation,
+not upstream projects or Unraid itself.

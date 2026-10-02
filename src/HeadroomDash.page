@@ -1,0 +1,6 @@
+Menu="Dashboard:0"
+---
+<?php
+require_once "/usr/local/emhttp/plugins/headroom/ui.php";
+$mytiles["headroom"]["column2"]=\Headroom\dashboard_ui((string)($var["csrf_token"]??""));
+?>

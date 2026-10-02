@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euo pipefail
+root=/usr/local/emhttp/plugins/headroom
+run=/tmp/headroom
+mkdir -p "$run"
+case "${1:-start}" in
+  start)
+    exec 9>"$run/start.lock"
+    flock -n 9 || exit 0
+    if /usr/bin/flock -n "$run/daemon.lock" true; then
+      nohup /usr/bin/nice -n 10 /usr/bin/php "$root/daemon.php" </dev/null >/dev/null 2>&1 9>&- &
+    fi
+    ;;
+  stop)
+    if [[ -f "$run/daemon.json" ]]; then
+      # PHP variables must reach the interpreter literally.
+      # shellcheck disable=SC2016
+      pid=$(/usr/bin/php -r '$v=json_decode(file_get_contents($argv[1]),true); echo (int)($v["pid"]??0);' "$run/daemon.json")
+      if [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) && [[ -r /proc/$pid/cmdline ]]; then
+        cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+        if [[ "$cmd" == *"$root/daemon.php"* ]]; then
+          kill -TERM "$pid"
+          for ((i=0;i<150;i++)); do
+            kill -0 "$pid" 2>/dev/null || exit 0
+            sleep .2
+          done
+          echo "Headroom has not stopped yet; leaving its files intact." >&2
+          exit 1
+        fi
+      fi
+    fi
+    ;;
+  *) echo "Usage: rc.headroom start|stop" >&2; exit 2 ;;
+esac
