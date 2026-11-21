@@ -30,6 +30,7 @@ try {
     foreach ($initialItems as $i) $containers[$i['container_id']]=$i['name'];
     foreach (explode("\n",$initial) as $line) record_oom($line,$pending,$containers,false);
     $pending=[];
+    try { locked(fn()=>migrate_native_memory_logged(false)); } catch(\Throwable $e) { event('error','Memory limit migration did not run: '.$e->getMessage()); }
     event('service','Headroom '.VERSION.' started.');
     while ($alive) {
         $now=time();
@@ -105,7 +106,7 @@ try {
                 if ($now>=$nextHistory) { history_add($s,$c['history_hours']); $nextHistory=$now+60; }
                 $visibleErrors=array_filter($errors,fn($k)=>!str_ends_with((string)$k,'_retry'),ARRAY_FILTER_USE_KEY);
                 save_json(RUN.'/status.json',['version'=>VERSION,'sample'=>$s,'items'=>public_items($items),'items_updated'=>$itemsUpdated,'explain'=>explain($c,$s,$items),
-                    'psi_requested'=>$c['psi_enabled'],'health'=>$state['pressure_now']?'Memory pressure':($state['swap_now']?'Swap full, RAM low':'Room to spare'),
+                    'psi_requested'=>$c['psi_enabled'],'native_memory'=>native_memory_supported(),'health'=>$state['pressure_now']?'Memory pressure':($state['swap_now']?'Swap full, RAM low':'Room to spare'),
                     'note'=>(!$state['pressure_now'] && !$state['swap_now'] && !empty($state['swap_full']))?($s['disk_used']>0?'Swap':'Compressed memory').' is full of rarely-used data. That is normal while RAM is free; Headroom only warns if RAM also runs low.':'',
                     'errors'=>$visibleErrors,'watchers'=>array_keys($streams),'updated'=>$now],0644);
                 unset($errors['sample']);

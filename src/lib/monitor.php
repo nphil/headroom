@@ -25,6 +25,18 @@ function notify(string $subject, string $message, string $severity='warning'): v
     run(['/usr/local/emhttp/plugins/dynamix/scripts/notify','-e','Headroom','-s',$subject,'-d',$message,'-i',$severity,'-l','/Settings/Headroom'],30);
     event('notification',$subject.': '.$message);
 }
+/** On Unraid 7.4+, move container limits from ExtraParams to the native Memory field. Reports problems; never throws, never restarts anything. */
+function migrate_native_memory_logged(bool $announce): void {
+    if(!native_memory_supported()) return;
+    try { $r=migrate_native_memory(); }
+    catch(\Throwable $e) { event('error','Could not move container memory limits into Unraid\'s Memory limit field: '.$e->getMessage()); return; }
+    if($r['moved']) event('migration','Moved memory limits into Unraid\'s own Memory limit field (no restart, live limits unchanged): '.implode(', ',array_map(fn($n,$v)=>$n.' '.$v,array_keys($r['moved']),$r['moved'])).'.');
+    $problems=[]; foreach($r['skipped']+$r['errors'] as $name=>$why) $problems[]=$name.': '.$why;
+    if(!$problems) return;
+    $message='These templates still keep their limit as a --memory option and were left unchanged: '.implode('; ',$problems).'. Unraid\'s Memory limit field is overridden by that option, so set the limit once from Headroom or the Docker Edit page.';
+    event('migration',$message,'memory-migration:'.md5($message));
+    if($announce) { try { notify('Memory limits need a look',$message); } catch(\Throwable $e) { event('error','Could not send the notification: '.$e->getMessage()); } }
+}
 function sample(array $items, string $dev): array {
     $m=meminfo(); $p=psi(); $z=zram_stats($dev); $arc=arc(); $ss=swaps();
     $swapSize=0; $swapUsed=0; $diskUsed=0;

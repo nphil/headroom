@@ -169,4 +169,108 @@ test('native priority overrides stale saved level and protects custom negative s
     same($p['score'],-123); same($p['custom'],true); same($p['eligible'],false);
     same(docker_policy($c,'docker:camera',0,'template')['level'],'normal');
 });
+function tpl(string $extra, ?string $memory=null, string $name='app'): string {
+    return '<?xml version="1.0"?>'."\n<Container version=\"2\">\n  <Name>$name</Name>\n  <CPUset></CPUset>\n".($memory===null?'':"  <Memory>$memory</Memory>\n").'  <ExtraParams>'.htmlspecialchars($extra,ENT_XML1|ENT_QUOTES,'UTF-8')."</ExtraParams>\n  <PostArgs></PostArgs>\n</Container>\n";
+}
+test('Unraid version gate: 7.4.0 and later use the Memory field, earlier and pre-release builds do not',function(){
+    same(native_memory_supported('7.3.3'),false); same(native_memory_supported('7.4.0'),true); same(native_memory_supported('7.4.1'),true);
+    same(native_memory_supported('7.10.0'),true); same(native_memory_supported('8.0.0'),true); same(native_memory_supported('7.4.0-rc.1'),false);
+    same(native_memory_supported('7.4.1-beta.2'),true); same(native_memory_supported('7.4'),true); same(native_memory_supported(''),false); same(native_memory_supported('garbage'),false);
+    $f=tempnam(sys_get_temp_dir(),'hrver'); try { file_put_contents($f,"version=\"7.4.0\"\n"); same(unraid_version($f),'7.4.0'); same(native_memory_supported(unraid_version($f)),true); file_put_contents($f,"version=\"7.3.3\"\n"); same(unraid_version($f),'7.3.3'); same(unraid_version('/nonexistent'),''); } finally { unlink($f); }
+});
+test('Docker memory sizes parse like docker run and format for the Unraid field',function(){
+    same(memory_bytes('24g'),24*GIB); same(memory_bytes('2G'),2*GIB); same(memory_bytes('256m'),256*MIB); same(memory_bytes('128M'),128*MIB);
+    same(memory_bytes('1536m'),1536*MIB); same(memory_bytes('1.5g'),1536*MIB); same(memory_bytes('2GB'),2*GIB); same(memory_bytes('2 GiB'),2*GIB);
+    same(memory_bytes('4096'),4096); same(memory_bytes('0'),0); same(memory_bytes('1t'),1024*GIB);
+    foreach(['','-1','g','1.5','1.0000001g','abc','$(echo 4g)','4gb extra','1e3'] as $bad) same(memory_bytes($bad),null);
+    same(memory_field(24*GIB),'24g'); same(memory_field(2*GIB),'2g'); same(memory_field(256*MIB),'256m'); same(memory_field(1536*MIB),'1536m');
+    same(memory_field(3*1024),'3k'); same(memory_field(1000),'1000'); same(memory_field(10737418240),'10g');
+    foreach([24*GIB,512*MIB,1536*MIB,5000,12345678] as $n) { same(memory_bytes(memory_field($n)),$n); if(!preg_match('/^[0-9]+[bkmgBKMG]?$/D',memory_field($n))) throw new \RuntimeException('Value does not fit the Unraid field.'); }
+});
+test('the 12 live ExtraParams memory forms migrate into the Memory field without losing other options',function(){
+    $cases=[ // name => [ExtraParams, expected remaining ExtraParams, expected Memory]
+        'Cody'=>['--memory=24g --memory-swap=-1','--memory-swap=-1','24g'],
+        'KokoroTTS'=>['--memory=4g --cpus=2','--cpus=2','4g'],
+        'MariaDB-Official'=>['--memory=2G','','2g'],
+        'NginxProxyManager'=>['--memory=1G --restart=unless-stopped','--restart=unless-stopped','1g'],
+        'Updates'=>['--memory=256m --memory-reservation=128m','--memory-reservation=128m','256m'],
+        'hypermind'=>['--memory 2G','','2g'],
+        'kestrel-audio'=>['--memory=4g --memory-swap=8g --memory-reservation=2g','--memory-swap=8g --memory-reservation=2g','4g'],
+        'lumashow-logs'=>['--memory=128m','','128m'],
+        'reprise'=>['--oom-score-adj=-500 --memory=6g','--oom-score-adj=-500','6g'],
+        'scrypted'=>['--memory=10g --label "a=b c"','--label "a=b c"','10g'],
+        'wyoming-openai'=>['--memory=1g','','1g'],
+        'short-flag'=>['-m 4G --cpus=1','--cpus=1','4g'],
+    ];
+    same(count($cases),12);
+    foreach($cases as $name=>[$extra,$left,$memory]) {
+        $old=tpl($extra,'',$name); $plan=memory_migration_plan($old);
+        same($plan['action'],'move'); $xml=simplexml_load_string($plan['content']);
+        same((string)$xml->ExtraParams,$left); same(trim((string)$xml->Memory),$memory); same((string)$xml->Name,$name); same((string)$xml->PostArgs,'');
+        same(memory_migration_plan($plan['content'])['action'],'none');
+    }
+    // Other spellings and a template that has no <Memory> element at all (older Unraid saved it).
+    foreach([['-m4G','4g'],['--memory="6g"','6g'],['-m 1536m','1536m'],['--memory=1.5g','1536m'],['--memory=2147483648','2g'],['--memory=1000','1000'],['--memory=1g -m 1G','1g']] as [$extra,$memory]) {
+        $plan=memory_migration_plan(tpl($extra)); same($plan['action'],'move'); $xml=simplexml_load_string($plan['content']);
+        same((string)$xml->ExtraParams,''); same(trim((string)$xml->Memory),$memory); same(count($xml->Memory),1);
+    }
+});
+test('migration leaves ambiguous templates untouched and says why',function(){
+    foreach([
+        'conflicting Memory field'=>tpl('--memory=2g','4g'),
+        'conflict with unlimited flag'=>tpl('--memory=0','4g'),
+        'two different limits'=>tpl('--memory=2g -m 4g'),
+        'inexact value'=>tpl('--memory=1.0000001g'),
+        'shell expression'=>tpl('--memory=$(cat /tmp/limit)'),
+        'empty value'=>tpl('--memory='),
+        'unreadable Memory field'=>tpl('--memory=2g','lots'),
+        'dangling flag'=>tpl('--label x --memory'),
+        'unclosed quote'=>tpl('--label "x --memory=2g'),
+        'two Memory elements'=>str_replace('<PostArgs>','<Memory>2g</Memory><PostArgs>',tpl('--memory=2g','2g')),
+    ] as $why=>$content) { $plan=memory_migration_plan($content); same($plan['action'].' '.$why,'skip '.$why); if(($plan['reason']??'')==='') throw new \RuntimeException('No reason given for: '.$why); }
+    // Not a problem: nothing to move, equal values, a zero flag next to an empty field.
+    same(memory_migration_plan(tpl('--memory-swap=-1 --memory-reservation=1g','2g'))['action'],'none');
+    same(memory_migration_plan(tpl('--label "--memory=2g"'))['action'],'none');
+    same(memory_migration_plan('<Container><Name>x</Name></Container>')['action'],'none'); same(memory_migration_plan('not xml')['action'],'none');
+    $same=memory_migration_plan(tpl('--memory=2g --cpus=1','2G')); same($same['action'],'move'); same(trim((string)simplexml_load_string($same['content'])->Memory),'2G'); same((string)simplexml_load_string($same['content'])->ExtraParams,'--cpus=1');
+    $zero=memory_migration_plan(tpl('--memory=0 --cpus=1','')); same($zero['action'],'move'); same(trim((string)simplexml_load_string($zero['content'])->Memory),'');
+    $stale=memory_migration_plan(tpl('--memory=2g','0')); same($stale['action'],'move'); same(trim((string)simplexml_load_string($stale['content'])->Memory),'2g');
+});
+test('migrating a directory backs up first, writes atomically, skips conflicts and changes nothing else',function(){
+    $dir=sys_get_temp_dir().'/hrmig-'.bin2hex(random_bytes(4)); mkdir($dir); $log=[];
+    try {
+        $files=['a'=>tpl('--memory=24g --memory-swap=-1','','Cody'),'b'=>tpl('--memory 2G','','hypermind'),'c'=>tpl('--memory=2g','4g','conflict'),'d'=>tpl('--cpus=1','1g','plain'),'e'=>tpl('--memory=$(x)','','dynamic')];
+        foreach($files as $k=>$v) file_put_contents("$dir/$k.xml",$v);
+        file_put_contents("$dir/notes.txt",'leave me'); file_put_contents("$dir/broken.xml",'<Container><Name>');
+        $result=migrate_native_memory($dir,function($path)use(&$log,$dir){ $log[]=['backup',basename($path)]; $copy=$dir.'/backups/'.basename($path); @mkdir($dir.'/backups'); copy($path,$copy); return $copy; });
+        same($result['moved'],['Cody'=>'24g','hypermind'=>'2g']); same(array_keys($result['skipped']),['conflict','dynamic']); same($result['errors'],[]);
+        same(array_column($log,1),['a.xml','b.xml']);
+        same(file_get_contents("$dir/backups/a.xml"),$files['a']); same(file_get_contents("$dir/backups/b.xml"),$files['b']);
+        foreach(['c','d','e'] as $k) same(file_get_contents("$dir/$k.xml"),$files[$k]);
+        same(file_get_contents("$dir/notes.txt"),'leave me');
+        $a=simplexml_load_file("$dir/a.xml"); same((string)$a->ExtraParams,'--memory-swap=-1'); same((string)$a->Memory,'24g'); same(substr(sprintf('%o',fileperms("$dir/a.xml")),-3),'644');
+        same(glob($dir.'/.headroom-*')?:[],[]);
+        $again=migrate_native_memory($dir,fn($p)=>throw new \RuntimeException('Nothing should be backed up twice.')); same($again['moved'],[]); same($again['errors'],[]);
+        // A failed backup stops that template from being written.
+        file_put_contents("$dir/f.xml",tpl('--memory=1g','','late'));
+        $failed=migrate_native_memory($dir,fn($p)=>throw new \RuntimeException('disk full')); same($failed['moved'],[]); same(array_keys($failed['errors']),['late']);
+        same(template_params((string)file_get_contents("$dir/f.xml")),'--memory=1g');
+    } finally { foreach(new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir,\FilesystemIterator::SKIP_DOTS),\RecursiveIteratorIterator::CHILD_FIRST) as $f) $f->isDir()?rmdir($f->getPathname()):unlink($f->getPathname()); rmdir($dir); }
+});
+test('on 7.4+ a limit lives only in the Memory field; before that only in ExtraParams',function(){
+    $old=tpl('--label "a=b c" --memory=24g --memory-swap=-1 --oom-score-adj=-500','','Cody');
+    $new=template_with_limit($old,8*GIB,true); $xml=simplexml_load_string($new);
+    same((string)$xml->ExtraParams,'--label "a=b c" --memory-swap=-1 --oom-score-adj=-500'); same((string)$xml->Memory,'8g');
+    same(template_memory(template_with_limit($new,1536*MIB,true)),'1536m'); same(template_params(template_with_limit($new,1536*MIB,true)),(string)$xml->ExtraParams);
+    $cleared=template_with_limit($new,0,true); same(template_memory($cleared),''); same(template_params($cleared),'--label "a=b c" --memory-swap=-1 --oom-score-adj=-500');
+    same(substr_count($cleared,'<Memory'),1);
+    $missing=template_with_limit(tpl('-m 2g'),3*GIB,true); same(template_memory($missing),'3g'); same(template_params($missing),''); same(substr_count($missing,'<Memory'),1);
+    same(template_with_limit(tpl('--cpus=1'),0,true),tpl('--cpus=1')); // nothing to clear, nothing invented
+    same(template_memory(template_with_memory('<Container><Name>x</Name><Memory a="b"/></Container>','512m')),'512m');
+    rejects(fn()=>template_with_memory(tpl(''),'2 gigs')); rejects(fn()=>template_with_memory(tpl('','1g'),'$(x)'));
+    // Older Unraid keeps the existing behaviour and never touches <Memory>.
+    $legacy=template_with_limit(tpl('--memory=24g --cpus=1','','Cody'),8*GIB,false); $xml=simplexml_load_string($legacy);
+    same((string)$xml->ExtraParams,'--cpus=1 --memory=8589934592'); same(trim((string)$xml->Memory),'');
+    $legacyClear=template_with_limit(tpl('--memory=24g --cpus=1','2g'),0,false); same(template_params($legacyClear),'--cpus=1'); same(template_memory($legacyClear),'2g');
+});
 echo "$passed passed, $failed failed\n"; exit($failed?1:0);

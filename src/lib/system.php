@@ -199,13 +199,12 @@ function set_limit(string $name, int $bytes): void {
     if ($bytes && $item['policy']['reserve_mib']*MIB>$bytes) throw new \InvalidArgumentException('Lower the reservation before lowering the app limit.');
     $path=template_for($name); $old=(string)file_get_contents($path);
     $xml=simplexml_load_string($old,'SimpleXMLElement',LIBXML_NONET);
-    $params=limit_params((string)$xml->ExtraParams,$bytes);
-    $new=template_with_params($old,$params);
+    $new=template_with_limit($old,$bytes,native_memory_supported());
     if ($new===$old && $item['limit']===$bytes) return;
     if (!simplexml_load_string($new,'SimpleXMLElement',LIBXML_NONET)) throw new \RuntimeException('Template validation failed.');
     $backup=backup($path);
     $restore=json_file(CONFIG.'/restore.json');
-    if (!isset($restore['limits'][$name])) { $restore['limits'][$name]=['limit'=>$item['limit'],'params'=>(string)$xml->ExtraParams]; save_json(CONFIG.'/restore.json',$restore); }
+    if (!isset($restore['limits'][$name])) { $restore['limits'][$name]=['limit'=>$item['limit'],'params'=>(string)$xml->ExtraParams,'memory'=>trim((string)$xml->Memory)]; save_json(CONFIG.'/restore.json',$restore); }
     update_memory($item['container_id'],$bytes);
     try { atomic($path,$new,0644); }
     catch (\Throwable $e) {

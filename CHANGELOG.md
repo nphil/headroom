@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026.11.21.1
+Container memory limits now use Unraid's own Memory limit field on Unraid 7.4 and later. Headroom reads and writes the limit there and removes any older --memory option from Extra Parameters, so there is a single place to look. Existing limits are moved across automatically on update and whenever Headroom starts. Live limits are unchanged and no app restarts. Templates are backed up first, and any template that is ambiguous (for example a Memory field that disagrees with its --memory option) is left alone and reported. Unraid 7.3 and earlier keep saving limits as a --memory option.
+
 ## 2026.10.02.3
 Full compressed swap no longer raises a warning on its own: with zram it is normal for swap to fill with rarely-used data while RAM is free, so the badge, dashboard and notification now need low available RAM (or real waiting-for-RAM pressure) as well, and a plain note explains the healthy case. The warning has a clear-down margin so it does not flap. Protection levels are renamed to match the plan card: Always protected, Keep running, Normal, Gives way first and Gives way before all. Saved settings are unchanged.
 

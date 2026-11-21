@@ -65,7 +65,7 @@ try {
         } elseif ($action==='limit') {
             $name=$body['name']??''; $bytes=$body['bytes']??null;
             if(!is_string($name)||!valid_id('docker:'.$name)||!is_int($bytes)) throw new \InvalidArgumentException('Invalid memory limit.');
-            set_limit($name,$bytes); $message=$name.': memory limit '.($bytes?round($bytes/GIB,2).' GiB':'cleared').' live and in the Unraid template. No restart.';
+            set_limit($name,$bytes); $message=$name.': memory limit '.($bytes?round($bytes/GIB,2).' GiB':'cleared').' live and '.(native_memory_supported()?'in Unraid\'s own Memory limit field':'in the Unraid template').'. No restart.';
         } elseif ($action==='zram') {
             $allowed=['zram_enabled','zram_size','zram_percent','zram_algo','zram_priority','swappiness'];
             if(array_diff(array_keys($body),$allowed)) throw new \InvalidArgumentException('Unknown compressed-swap setting.');

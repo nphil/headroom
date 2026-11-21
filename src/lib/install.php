@@ -59,6 +59,7 @@ function install(): array {
     }
     $c=config(); $dev=configure_zram($c,false);
     migrate_native_priorities($c);
+    migrate_native_memory_logged(true);
     write_kernel('/proc/sys/vm/swappiness',$c['swappiness']);
     if ($legacy) { $moved=restore_legacy_memberships(inventory($c)); if($moved) event('migration','Returned '.$moved.' container processes misplaced by the legacy plugin to their own Docker control groups. Host services were not moved.'); }
     $applied=apply_policy($c);
@@ -93,10 +94,7 @@ function uninstall(): void {
     foreach ($restore['limits']??[] as $name=>$old) {
         if (!isset($items['docker:'.$name])) continue;
         $path=template_for($name); $content=(string)file_get_contents($path);
-        $xml=simplexml_load_string($content,'SimpleXMLElement',LIBXML_NONET);
-        $params=limit_params((string)$xml->ExtraParams,(int)$old['limit']);
-        $node='<ExtraParams>'.htmlspecialchars($params,ENT_XML1|ENT_QUOTES,'UTF-8').'</ExtraParams>';
-        $new=preg_replace_callback('#<ExtraParams(?:\s[^>]*)?>.*?</ExtraParams>|<ExtraParams\s*/>#s',fn()=>$node,$content,1);
+        $new=template_with_limit($content,(int)$old['limit'],native_memory_supported());
         backup($path); update_memory($items['docker:'.$name]['container_id'],(int)$old['limit']); atomic($path,$new,0644);
     }
     foreach ($targets as $path) safe_swapoff($path);
