@@ -1,21 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<PLUGIN name="headroom" author="Nitin Philip" version="2026.10.02.3" launch="Settings/Headroom" pluginURL="https://raw.githubusercontent.com/nphil/headroom/main/headroom.plg" min="7.0.0" support="https://github.com/nphil/headroom/issues" icon="headroom.svg">
-<CHANGES><![CDATA[## 2026.10.02.3
-Full compressed swap no longer raises a warning on its own. With zram it is normal for swap to fill with rarely-used data while RAM is free, so the status badge, dashboard tile and notification now need low available RAM (or real waiting-for-RAM pressure) as well, and a plain note explains the healthy case. The warning has a clear-down margin so it does not flap. Protection levels are renamed to match the plan card: Always protected, Keep running, Normal, Gives way first and Gives way before all. Saved settings are unchanged.
+<PLUGIN name="headroom" author="Nitin Philip" version="2026.11.21.1" launch="Settings/Headroom" pluginURL="https://raw.githubusercontent.com/nphil/headroom/main/headroom.plg" min="7.0.0" support="https://github.com/nphil/headroom/issues" icon="headroom.svg">
+<CHANGES><![CDATA[## 2026.11.21.1
+Container memory limits now use Unraid's own Memory limit field on Unraid 7.4 and later. Headroom reads and writes the limit there and removes any older --memory option from Extra Parameters, so there is a single place to look. Existing limits are moved across automatically on update and whenever Headroom starts. Live limits are unchanged and no app restarts. Templates are backed up first, and any template that is ambiguous (for example a Memory field that disagrees with its --memory option) is left alone and reported. Unraid 7.3 and earlier keep saving limits as a --memory option.
 ]]></CHANGES>
-<FILE Name="/boot/config/plugins/headroom/headroom-2026.10.02.3.tar.gz">
-<URL>https://github.com/nphil/headroom/releases/download/2026.10.02.3/headroom-2026.10.02.3.tar.gz</URL>
-<MD5>c41be935ea95d93bd1486b9c4461696a</MD5>
+<FILE Name="/boot/config/plugins/headroom/headroom-2026.11.21.1.tar.gz">
+<URL>https://github.com/nphil/headroom/releases/download/2026.11.21.1/headroom-2026.11.21.1.tar.gz</URL>
+<MD5>48c1e1c299e4323d9ee9806de78c18d4</MD5>
 </FILE>
-<FILE Name="/tmp/headroom-install-2026.10.02.3" Run="/bin/bash"><INLINE><![CDATA[
+<FILE Name="/tmp/headroom-install-2026.11.21.1" Run="/bin/bash"><INLINE><![CDATA[
 #!/bin/bash
 set -euo pipefail
 root=/usr/local/emhttp/plugins/headroom
-archive=/boot/config/plugins/headroom/headroom-2026.10.02.3.tar.gz
+archive=/boot/config/plugins/headroom/headroom-2026.11.21.1.tar.gz
 stage=$(mktemp -d /tmp/headroom-install.XXXXXX)
-cleanup() { rm -rf -- "$stage"; rm -f -- /tmp/headroom-install-2026.10.02.3; }
+cleanup() { rm -rf -- "$stage"; rm -f -- /tmp/headroom-install-2026.11.21.1; }
 trap cleanup EXIT
-printf '%s  %s\n' '3c6cd884bfe37736d365bff8680134a2a7c160c1ce58169134e62245bff12d78' "$archive" | sha256sum -c -
+printf '%s  %s\n' '33dd0557aa40ea38f8e7302b61d61af34ffac65f7bf587eaef01badb14b6cc92' "$archive" | sha256sum -c -
 mkdir "$stage/new"
 tar --no-same-owner -xzf "$archive" -C "$stage/new"
 for file in cli.php daemon.php lib/config.php lib/system.php lib/templates.php lib/monitor.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
@@ -40,13 +40,13 @@ if ! php "$root/cli.php" install; then
   exit 1
 fi
 "$root/rc.headroom" start
-echo 'Headroom 2026.10.02.3 installed. Open Settings > Headroom. No server or app was restarted.'
+echo 'Headroom 2026.11.21.1 installed. Open Settings > Headroom. No server or app was restarted.'
 ]]></INLINE></FILE>
-<FILE Name="/tmp/headroom-remove-2026.10.02.3" Run="/bin/bash" Method="remove"><INLINE><![CDATA[
+<FILE Name="/tmp/headroom-remove-2026.11.21.1" Run="/bin/bash" Method="remove"><INLINE><![CDATA[
 #!/bin/bash
 set -euo pipefail
 root=/usr/local/emhttp/plugins/headroom
-trap 'rm -f /tmp/headroom-remove-2026.10.02.3' EXIT
+trap 'rm -f /tmp/headroom-remove-2026.11.21.1' EXIT
 "$root/rc.headroom" stop
 if ! php "$root/cli.php" uninstall; then
   # A refused evacuation must not leave monitoring/protection switched off.
