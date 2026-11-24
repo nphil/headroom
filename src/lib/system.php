@@ -72,22 +72,71 @@ function restore_legacy_memberships(array $items): int {
     }
     return $moved;
 }
+/** Does the kernel's memory.swap.max text satisfy the wanted cap? null = unlimited ("max"); numbers are rounded down to whole pages by the kernel. */
+function swap_limit_matches(?int $wanted, string $live): bool {
+    if ($wanted===null) return $live==='max';
+    if (!ctype_digit($live)) return false;
+    $diff=$wanted-(int)$live;
+    return $diff>=0 && $diff<65536;
+}
+/** Live compressed-swap state of one container's own cgroup. 'ok' is true when nothing is wanted or the kernel reports the wanted cap. */
+function swap_state(string $cg, ?int $wanted): array {
+    $file=$cg===''?'':$cg.'/memory.swap.max'; $supported=$file!=='' && is_file($file);
+    $live=$supported?text($file):null;
+    return ['supported'=>$cg===''?null:$supported,'wanted'=>$wanted,'live'=>$live,'current'=>$supported?(int)text($cg.'/memory.swap.current'):0,
+        'ok'=>$wanted===null || ($live!==null && swap_limit_matches($wanted,$live)),'error'=>null];
+}
+/**
+ * Write memory.swap.max in a container's OWN cgroup (null = max) and read it back. Returns true when it changed the value.
+ * Never touches a parent group; a kernel that lacks the file or refuses the write is reported, not worked around.
+ */
+function write_swap_limit(string $cg, ?int $bytes): bool {
+    if (!str_starts_with($cg,'/sys/fs/cgroup/') || str_contains($cg,'..')) throw new \RuntimeException('The container control group could not be verified.');
+    $file=$cg.'/memory.swap.max';
+    if (!is_file($file)) throw new \RuntimeException('This kernel does not offer a per-container swap limit: the container control group has no memory.swap.max.');
+    if (swap_limit_matches($bytes,text($file))) return false;
+    if (@file_put_contents($file,$bytes===null?'max':(string)$bytes)===false) throw new \RuntimeException('The kernel refused the swap limit ('.(error_get_last()['message']??'write failed').').');
+    $live=text($file);
+    if (!swap_limit_matches($bytes,$live)) throw new \RuntimeException('The kernel accepted the swap limit but the container still reports '.$live.'.');
+    return true;
+}
+/** The limit as saved in the template: a --memory flag wins over Unraid's Memory field (it comes later on the docker command line). */
+function template_limit_text(array $fields): ?string {
+    foreach (parameter_entries($fields['params']) as $entry) if (in_array($entry['flag'],['--memory','-m'],true) && is_string($entry['value'])) $flag=$entry['value'];
+    return $flag??($fields['memory']!==''?$fields['memory']:null);
+}
+/** Re-read the swap state of every container that has a saved limit (after the daemon wrote it) and attach any refusal. */
+function swap_results(array $c, array $items, array $errors): array {
+    foreach ($items as $id=>$item) if ($item['kind']==='docker' && isset($c['swap_limits'][$item['name']])) {
+        $state=swap_state($item['cgroup'],$c['swap_limits'][$item['name']]);
+        if (isset($errors[$item['name']])) { $state['error']=$errors[$item['name']]; $state['ok']=false; }
+        $items[$id]['swap']=$state;
+    }
+    return $items;
+}
 function docker_items(array $c): array {
     if (!file_exists('/var/run/docker.sock')) return [];
     $ids=preg_split('/\s+/',run(['docker','ps','-aq','--no-trunc']));
     if (!$ids || $ids===['']) return [];
-    $format='{"id":{{json .Id}},"name":{{json .Name}},"pid":{{.State.Pid}},"running":{{.State.Running}},"limit":{{.HostConfig.Memory}},"swap_limit":{{.HostConfig.MemorySwap}},"native_score":{{.HostConfig.OomScoreAdj}},"restart":{{json .HostConfig.RestartPolicy.Name}}}';
+    $format='{"id":{{json .Id}},"name":{{json .Name}},"pid":{{.State.Pid}},"running":{{.State.Running}},"limit":{{.HostConfig.Memory}},"cpu_shares":{{.HostConfig.CpuShares}},"cpuset":{{json .HostConfig.CpusetCpus}},"native_score":{{.HostConfig.OomScoreAdj}},"restart":{{json .HostConfig.RestartPolicy.Name}}}';
     $rows=explode("\n",run(array_merge(['docker','inspect','--format',$format],$ids)));
     $out=[]; $templates=template_index();
     foreach ($rows as $row) {
         $d=json_decode($row,true,32,JSON_THROW_ON_ERROR); $name=ltrim($d['name'],'/');
         $id='docker:'.$name; $cg=$d['running'] ? container_group($d['id'],(int)$d['pid']) : '';
         $paths=$templates[$name]??[]; $hasTemplate=count($paths)===1;
-        $flag=$hasTemplate?priority_score(template_params((string)file_get_contents($paths[0]))):null;
+        $fields=$hasTemplate?template_fields((string)file_get_contents($paths[0])):null;
+        $flag=$hasTemplate?priority_score($fields['params']):null;
+        $cpuFlag=null; $cpuError=null;
+        if($hasTemplate) { try { $cpuFlag=cpu_shares_flag($fields['params']); } catch(\InvalidArgumentException $e) { $cpuError=$e->getMessage(); } }
         $desired=$hasTemplate?($flag??0):(int)$d['native_score'];
         $out[$id]=['id'=>$id,'name'=>$name,'kind'=>'docker','state'=>$d['running']?'running':'stopped',
             'container_id'=>$d['id'],'pid'=>(int)$d['pid'],'cgroup'=>$cg,'usage'=>$cg?(int)text($cg.'/memory.current'):0,
-            'limit'=>(int)$d['limit']>=UNLIMITED_MEMORY?0:(int)$d['limit'],'swap_limit'=>text($cg.'/memory.swap.max'),'restart'=>$d['restart'],
+            'limit'=>(int)$d['limit']>=UNLIMITED_MEMORY?0:(int)$d['limit'],'limit_template'=>$hasTemplate?template_limit_text($fields):null,'restart'=>$d['restart'],
+            'swap'=>swap_state($cg,$c['swap_limits'][$name]??null),
+            'cpu_shares'=>(int)$d['cpu_shares'],'cpu_weight'=>$cg&&is_file($cg.'/cpu.weight')?(int)text($cg.'/cpu.weight'):null,
+            'cpu_template'=>$cpuFlag,'cpu_template_error'=>$cpuError,
+            'cpuset'=>$d['cpuset']===''?null:$d['cpuset'],'cpuset_template'=>$hasTemplate?($fields['cpuset']===''?null:$fields['cpuset']):null,
             'adj'=>$d['pid']?(int)text('/proc/'.$d['pid'].'/oom_score_adj'):null,
             'whole_actual'=>$cg?(int)text($cg.'/memory.oom.group'):null,
             'reserve_min'=>$cg?(int)text($cg.'/memory.min'):0,'reserve_low'=>$cg?(int)text($cg.'/memory.low'):0,
@@ -156,7 +205,7 @@ function reservation_parents(array $c, array $items): void {
     foreach ($baseline as $path=>$original) if (is_file($path)) write_kernel($path,max($original,$wanted[$path]??0));
 }
 function apply_policy(array $c, ?array $items=null): array {
-    $items ??= inventory($c); reservation_check($c,$items); $errors=[]; $changed=0; $repairs=[];
+    $items ??= inventory($c); reservation_check($c,$items); $errors=[]; $changed=0; $repairs=[]; $swapApplied=[]; $swapErrors=[];
     try { reservation_parents($c,$items); } catch (\Throwable $e) { $errors[]=$e->getMessage(); }
     foreach ($items as $id=>$item) {
         if ($item['kind']==='docker' && $item['state']==='running' && !$item['cgroup']) { $errors[]=$id.': container control group could not be verified.'; continue; }
@@ -177,8 +226,14 @@ function apply_policy(array $c, ?array $items=null): array {
             write_kernel($cg.'/memory.min',$p['level']==='never'?$p['reserve_mib']*MIB:0);
             write_kernel($cg.'/memory.low',$p['level']==='last'?$p['reserve_mib']*MIB:0);
         } catch (\Throwable $e) { if (is_dir($cg)) $errors[]=$id.': '.$e->getMessage(); }
+        // Compressed-swap allowance: the container's own cgroup only, never a parent. Refusals are reported apart from protection errors.
+        $wanted=$item['kind']==='docker'?($c['swap_limits'][$item['name']]??null):null;
+        if ($wanted!==null) {
+            try { if (write_swap_limit($cg,$wanted)) $swapApplied[]=$item['name']; }
+            catch (\Throwable $e) { if (is_dir($cg)) $swapErrors[$item['name']]=$e->getMessage(); }
+        }
     }
-    return ['processes'=>$changed,'repairs'=>$repairs,'errors'=>$errors];
+    return ['processes'=>$changed,'repairs'=>$repairs,'errors'=>$errors,'swap_applied'=>$swapApplied,'swap_errors'=>$swapErrors];
 }
 function update_memory(string $id, int $bytes): void {
     $args=['docker','update','--memory',(string)($bytes?:UNLIMITED_MEMORY)];
@@ -212,6 +267,44 @@ function set_limit(string $name, int $bytes): void {
         catch (\Throwable $rollback) { throw new \RuntimeException('Template save and live rollback failed. Backup: '.$backup.'; '.$rollback->getMessage()); }
         throw $e;
     }
+}
+/** docker update --cpu-shares applies live with no restart; the result is read back from Docker's own record. */
+function update_cpu_shares(string $id, int $shares): void {
+    integer($shares,CPU_SHARES_MIN,CPU_SHARES_MAX,'CPU shares');
+    run(['docker','update','--cpu-shares',(string)$shares,$id]);
+    if ((int)run(['docker','inspect','--format','{{.HostConfig.CpuShares}}',$id])!==$shares) throw new \RuntimeException('Docker did not apply the requested CPU priority. Check the live setting before retrying.');
+}
+/** Named CPU priority: Docker's --cpu-shares saved in the Unraid template (Normal removes the flag), then applied live. */
+function set_cpu_priority(string $name, string $level): void {
+    if (!isset(CPU_LEVELS[$level])) throw new \InvalidArgumentException('Choose one of: '.implode(', ',array_keys(CPU_LEVELS)).'.');
+    $item=docker_items(config())['docker:'.$name]??null;
+    if (!$item) throw new \RuntimeException('Container not found.');
+    if (!$item['template_available']) throw new \RuntimeException('Save a unique Unraid template for '.$name.' first, so the CPU priority survives updates.');
+    $shares=CPU_LEVELS[$level];
+    $template=set_template_cpu_shares($name,$level==='normal'?null:$shares);
+    try { if (cpu_effective($item['cpu_shares'])!==$shares) update_cpu_shares($item['container_id'],$shares); }
+    catch (\Throwable $e) { if ($template['changed']) atomic($template['path'],$template['old'],0644); throw $e; }
+}
+/**
+ * Per-container compressed-swap allowance: null = unlimited, 0 = none, else bytes. Saved in Headroom's own settings and written to the
+ * container's own cgroup (the daemon re-applies it after every restart). A kernel refusal leaves the saved setting unchanged.
+ */
+function set_swap_limit(string $name, ?int $bytes): array {
+    $c=config(); $item=docker_items($c)['docker:'.$name]??null;
+    if (!$item) throw new \RuntimeException('Container not found.');
+    $new=$c;
+    if ($bytes===null) unset($new['swap_limits'][$name]); else $new['swap_limits'][$name]=$bytes;
+    $new=validate($new); $live=false; $cg=$item['cgroup'];
+    if ($item['state']==='running') {
+        if (!$cg) throw new \RuntimeException('The container control group could not be verified; nothing was changed.');
+        $previous=$item['swap']['live'];
+        if ($bytes!==null || $item['swap']['supported']) write_swap_limit($cg,$bytes);
+        $live=true;
+        try { save_config($new); }
+        catch (\Throwable $e) { if ($previous!==null) @file_put_contents($cg.'/memory.swap.max',$previous); throw $e; }
+    } else save_config($new);
+    $current=$cg?(int)text($cg.'/memory.swap.current'):0;
+    return ['live'=>$live,'current'=>$current,'over'=>$live && $bytes!==null && $current>$bytes];
 }
 function arc_config(string $old, int $bytes): string {
     $lines=explode("\n",rtrim($old)); $found=false;

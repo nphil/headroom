@@ -204,6 +204,30 @@ function priority_score(string $params): ?int {
     }
     return $score;
 }
+const CPU_SHARES_FLAGS=['--cpu-shares','-c'];
+/** Docker's --cpu-shares / -c from ExtraParams: null when absent, 0 when Docker's own "use the default" spelling. A bad value throws rather than guessing. */
+function cpu_shares_flag(string $params): ?int {
+    $shares=null;
+    foreach(parameter_entries($params) as $entry) if(in_array($entry['flag'],CPU_SHARES_FLAGS,true)) {
+        if(!is_string($entry['value']) || !preg_match('/^(?:0|[1-9][0-9]{0,5})$/D',$entry['value'])) throw new \InvalidArgumentException('Use a whole number for --cpu-shares in the Unraid template.');
+        $value=(int)$entry['value'];
+        if($value!==0) integer($value,CPU_SHARES_MIN,CPU_SHARES_MAX,'CPU shares');
+        $shares=$value;
+    }
+    return $shares;
+}
+/** Exactly one --cpu-shares=N (null removes it), other words kept. Already-correct text is returned byte for byte. */
+function cpu_shares_params(string $params, ?int $shares): string {
+    if($shares!==null) integer($shares,CPU_SHARES_MIN,CPU_SHARES_MAX,'CPU shares');
+    $present=array_values(array_filter(parameter_entries($params),fn($e)=>in_array($e['flag'],CPU_SHARES_FLAGS,true)));
+    if($shares===null && !$present) return $params;
+    if($shares!==null && count($present)===1 && $present[0]['flag']==='--cpu-shares' && $present[0]['value']===(string)$shares) return $params;
+    return replace_parameter($params,CPU_SHARES_FLAGS,$shares===null?null:(string)$shares);
+}
+/** Docker treats no flag and 0 as its default weight of 1024. */
+function cpu_effective(?int $shares): int { return $shares?:1024; }
+/** Named level for a share count, or null for a custom number. */
+function cpu_level(?int $shares): ?string { $level=array_search(cpu_effective($shares),CPU_LEVELS,true); return $level===false?null:$level; }
 function template_index(): array {
     $found=[]; libxml_use_internal_errors(true);
     foreach(glob('/boot/config/plugins/dockerMan/templates-user/*.xml')?:[] as $path) {
@@ -238,6 +262,24 @@ function set_template_priority(string $name, ?int $score): array {
         if(!array_key_exists($name,$restore['priorities']??[])) {
             $restore['priorities'][$name]=priority_score($params); save_json(CONFIG.'/restore.json',$restore);
         }
+        atomic($path,$new,0644);
+    }
+    return ['path'=>$path,'old'=>$old,'changed'=>$new!==$old];
+}
+/** One parse for the template fields Headroom reads: ExtraParams, Unraid's own CPU pinning (<CPUset>) and Memory limit. */
+function template_fields(string $content): array {
+    $xml=simplexml_load_string($content,'SimpleXMLElement',LIBXML_NONET);
+    if(!$xml || $xml->getName()!=='Container') throw new \RuntimeException('Invalid Unraid container template.');
+    return ['params'=>(string)$xml->ExtraParams,'cpuset'=>trim((string)$xml->CPUset),'memory'=>trim((string)$xml->Memory)];
+}
+/** Save Docker's --cpu-shares in ExtraParams (null = Docker default, flag removed). Caller holds the operation lock and applies live. */
+function set_template_cpu_shares(string $name, ?int $shares): array {
+    $path=template_for($name); $old=(string)file_get_contents($path); $params=template_params($old);
+    $original=cpu_shares_flag($params)?:null; // refuses a template whose current value cannot be read
+    $new=template_with_params($old,cpu_shares_params($params,$shares));
+    if($new!==$old) {
+        backup($path); $restore=json_file(CONFIG.'/restore.json');
+        if(!array_key_exists($name,$restore['cpu_shares']??[])) { $restore['cpu_shares'][$name]=$original; save_json(CONFIG.'/restore.json',$restore); }
         atomic($path,$new,0644);
     }
     return ['path'=>$path,'old'=>$old,'changed'=>$new!==$old];

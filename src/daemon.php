@@ -77,6 +77,10 @@ try {
                     $c=config(); $items=inventory($c); $itemsUpdated=microtime(true); $result=apply_policy($c,$items);
                     foreach($result['repairs'] as $name=>$count) event('priority-repair',$name.': safety net corrected '.$count.' process score(s) to match its native template/Docker priority.');
                     if ($result['errors']) $errors['protection']=implode('; ',$result['errors']); else unset($errors['protection']);
+                    foreach($result['swap_applied'] as $name) event('swap-limit',$name.': compressed-swap limit applied to the container\'s own control group.');
+                    foreach($result['swap_errors'] as $name=>$why) event('swap-limit',$name.': '.$why,'swap-limit:'.md5($name.$why));
+                    $items=swap_results($c,$items,$result['swap_errors']);
+                    if ($result['swap_errors']) $errors['swap_limits']=implode('; ',array_map(fn($n,$w)=>$n.' swap limit: '.$w,array_keys($result['swap_errors']),$result['swap_errors'])); else unset($errors['swap_limits']);
                     foreach ($items as $i) if ($i['kind']==='docker') $containers[$i['container_id']]=$i['name'];
                     if (count($containers)>500) $containers=array_slice($containers,-500,null,true);
                 },false);

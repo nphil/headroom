@@ -103,6 +103,13 @@ function uninstall(): void {
         $path=template_for($name); $content=(string)file_get_contents($path);
         atomic($path,template_with_params($content,priority_params(template_params($content),$score)),0644);
     }
+    foreach($restore['cpu_shares']??[] as $name=>$original) {
+        if(!isset(template_index()[$name])) continue;
+        $path=template_for($name); $content=(string)file_get_contents($path);
+        atomic($path,template_with_params($content,cpu_shares_params(template_params($content),$original)),0644);
+        $live=$items['docker:'.$name]??null;
+        if($live && cpu_effective($live['cpu_shares'])!==cpu_effective($original)) update_cpu_shares($live['container_id'],cpu_effective($original));
+    }
     $restoredDocker=docker_items($c);
     if ($dev) run(['zramctl','--reset',$dev]);
     write_kernel('/proc/sys/vm/swappiness',$restore['swappiness']??60);
@@ -120,6 +127,10 @@ function uninstall(): void {
             write_kernel('/proc/'.$pid.'/oom_score_adj',$i['kind']==='docker'?($restoredDocker[$i['id']]['policy']['score']??0):0);
         }
         if ($i['cgroup']) foreach (['memory.min','memory.low','memory.oom.group'] as $field) if (is_file($i['cgroup'].'/'.$field)) write_kernel($i['cgroup'].'/'.$field,0);
+        if ($i['kind']==='docker' && $i['cgroup'] && isset($c['swap_limits'][$i['name']])) {
+            try { write_swap_limit($i['cgroup'],null); }
+            catch (\Throwable $e) { event('error',$i['name'].': could not lift the Headroom swap limit while removing Headroom ('.$e->getMessage().'). It ends when the app restarts.'); }
+        }
     }
     @unlink('/etc/libvirt/hooks/qemu.d/50-headroom');
     backup(CONFIG.'/headroom.cron'); @unlink(CONFIG.'/headroom.cron'); run(['/usr/local/sbin/update_cron']);

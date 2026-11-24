@@ -11,13 +11,19 @@ const GIB = 1073741824;
 const MIB = 1048576;
 const LEVELS = ['never' => -1000, 'last' => -500, 'normal' => 0, 'early' => 500, 'first' => 1000];
 const LABELS = ['never' => 'Always protected', 'last' => 'Keep running', 'normal' => 'Normal', 'early' => 'Gives way first', 'first' => 'Gives way before all'];
+// CPU priority is Docker's own --cpu-shares (relative weight under contention; Docker's default is 1024). 'normal' means no flag.
+const CPU_LEVELS = ['high' => 4096, 'normal' => 1024, 'low' => 512, 'lowest' => 2];
+const CPU_LABELS = ['high' => 'Gets more CPU', 'normal' => 'Normal', 'low' => 'Gives way', 'lowest' => 'Gives way to everything'];
+const CPU_SHARES_MIN = 2;
+const CPU_SHARES_MAX = 262144;
+const SWAP_LIMIT_MIN = 64 * MIB;
 const CORE = ['emhttpd','nginx','php-fpm','dockerd','containerd','shfs','smbd','sshd','tailscaled','ttyd','rsyslogd','upsmon','usbhid-ups','upsd','libvirtd','virtqemud'];
 
 function defaults(): array {
     return ['schema' => 1, 'zram_enabled' => true, 'zram_size' => '16G', 'zram_percent' => 25,
         'zram_algo' => 'zstd', 'zram_priority' => 100, 'swappiness' => 150,
         'disk_enabled' => false, 'disk_mount' => '', 'disk_size' => '16G', 'disk_priority' => 10,
-        'arc_max' => 0, 'default_level' => 'normal', 'items' => [],
+        'arc_max' => 0, 'default_level' => 'normal', 'items' => [], 'swap_limits' => [],
         'alerts' => true, 'psi_enabled' => true, 'available_percent' => 10, 'psi_some' => 10, 'psi_full' => 2,
         'sustain_seconds' => 60, 'swap_percent' => 85, 'ramdisk_growth_mib' => 512,
         'act_early' => false, 'act_seconds' => 180, 'history_hours' => 72];
@@ -77,6 +83,12 @@ function validate(array $input): array {
         if (str_starts_with($id, 'proc:') && in_array(substr($id,5), CORE, true) && $item['level'] !== 'never') throw new \InvalidArgumentException('Core Unraid services must remain Always protected.');
     }
     unset($item);
+    if (!is_array($c['swap_limits'])) throw new \InvalidArgumentException('Invalid swap limits.');
+    foreach ($c['swap_limits'] as $name => $bytes) {
+        if (!valid_id('docker:'.$name)) throw new \InvalidArgumentException('Invalid container name in the swap limits.');
+        if (!is_int($bytes) || $bytes < 0 || ($bytes > 0 && $bytes < SWAP_LIMIT_MIN) || $bytes > 1024 * GIB) throw new \InvalidArgumentException('A swap limit is none (0) or between 64 MiB and 1024 GiB.');
+    }
+    ksort($c['swap_limits'], SORT_STRING);
     foreach (CORE as $name) $c['items']['proc:'.$name] = ['level'=>'never','whole'=>false,'reserve_mib'=>0,'eligible'=>false];
     return $c;
 }

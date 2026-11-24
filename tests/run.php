@@ -4,6 +4,7 @@ namespace Headroom;
 require_once __DIR__.'/../src/lib/monitor.php';
 $passed=0; $failed=0;
 require_once __DIR__.'/../src/lib/boot.php';
+require_once __DIR__.'/../src/lib/control.php';
 test('container identity never trusts a shared legacy host group',function(){
     $id=str_repeat('a',64);
     same(container_root('/sys/fs/cgroup/zram-protected/nginx',$id),'');
@@ -272,5 +273,141 @@ test('on 7.4+ a limit lives only in the Memory field; before that only in ExtraP
     $legacy=template_with_limit(tpl('--memory=24g --cpus=1','','Cody'),8*GIB,false); $xml=simplexml_load_string($legacy);
     same((string)$xml->ExtraParams,'--cpus=1 --memory=8589934592'); same(trim((string)$xml->Memory),'');
     $legacyClear=template_with_limit(tpl('--memory=24g --cpus=1','2g'),0,false); same(template_params($legacyClear),'--cpus=1'); same(template_memory($legacyClear),'2g');
+});
+test('CPU shares edits keep one flag, custom parameters and flag-like labels',function(){
+    $params='--label "--cpu-shares=7" --cpu-shares 512 --privileged -c 2048 -eNAME=value --cpu-shares=1024';
+    same(cpu_shares_flag($params),1024);
+    $result=cpu_shares_params($params,4096);
+    same($result,'--label "--cpu-shares=7" --privileged -eNAME=value --cpu-shares=4096');
+    same(cpu_shares_flag($result),4096);
+    same(cpu_shares_params($result,4096),$result);
+    same(cpu_shares_params($result,null),'--label "--cpu-shares=7" --privileged -eNAME=value');
+    same(cpu_shares_flag(cpu_shares_params($result,null)),null);
+    $plain='--hostname $(hostname -f) --label \'a --cpu-shares=9\'';
+    same(cpu_shares_params($plain,null),$plain);
+    same(cpu_shares_params($plain,512),$plain.' --cpu-shares=512');
+    same(cpu_shares_flag('--cpu-shares=0'),0); same(cpu_shares_flag('--memory=1g'),null);
+    foreach(['--cpu-shares=1','--cpu-shares=262145','--cpu-shares=abc','--cpu-shares=$(x)','--cpu-shares=-5','--cpu-shares=01','--cpu-shares'] as $bad) rejects(fn()=>cpu_shares_flag($bad));
+    foreach([1,262145,-1] as $bad) rejects(fn()=>cpu_shares_params('',$bad));
+});
+test('CPU levels map to shares and unset means Normal',function(){
+    same(CPU_LEVELS,['high'=>4096,'normal'=>1024,'low'=>512,'lowest'=>2]); same(array_keys(CPU_LABELS),array_keys(CPU_LEVELS));
+    same(cpu_effective(null),1024); same(cpu_effective(0),1024); same(cpu_effective(512),512);
+    same(cpu_level(null),'normal'); same(cpu_level(0),'normal'); same(cpu_level(1024),'normal'); same(cpu_level(2),'lowest'); same(cpu_level(26000),null);
+});
+test('CPU priority edits keep pinning, memory, OOM priority and unrelated XML',function(){
+    $old=tpl('--label "a=b c" --cpu-shares=2 --oom-score-adj=500 --memory-swap=16g','8g','proof');
+    $fields=template_fields($old);
+    same($fields,['params'=>'--label "a=b c" --cpu-shares=2 --oom-score-adj=500 --memory-swap=16g','cpuset'=>'','memory'=>'8g']);
+    $new=template_with_params($old,cpu_shares_params($fields['params'],4096));
+    same(template_params($new),'--label "a=b c" --oom-score-adj=500 --memory-swap=16g --cpu-shares=4096');
+    same(template_memory($new),'8g'); same(substr_count($new,'<CPUset'),1);
+    $normal=template_with_params($new,cpu_shares_params(template_params($new),null));
+    same(template_params($normal),'--label "a=b c" --oom-score-adj=500 --memory-swap=16g');
+    $pinned='<Container><Name>x</Name><CPUset>0,8</CPUset><ExtraParams>-c 512</ExtraParams></Container>';
+    same(template_fields($pinned),['params'=>'-c 512','cpuset'=>'0,8','memory'=>'']);
+    $edited=template_with_params($pinned,cpu_shares_params('-c 512',1024));
+    same(template_params($edited),'--cpu-shares=1024'); same(template_fields($edited)['cpuset'],'0,8');
+    rejects(fn()=>template_fields('<NotAContainer/>'));
+});
+test('template memory text prefers a --memory flag, as Docker reads it',function(){
+    same(template_limit_text(['params'=>'--memory=4g -m 2g','cpuset'=>'','memory'=>'8g']),'2g');
+    same(template_limit_text(['params'=>'--cpus=1','cpuset'=>'','memory'=>'8g']),'8g');
+    same(template_limit_text(['params'=>'','cpuset'=>'','memory'=>'']),null);
+});
+test('swap limits migrate additively and reject unsafe values',function(){
+    $old=defaults(); unset($old['swap_limits']);
+    same(validate($old)['swap_limits'],[]); same(validate([])['swap_limits'],[]);
+    same(validate(['items'=>['docker:cam'=>['level'=>'early']]])['swap_limits'],[]);
+    $c=validate(['swap_limits'=>['zeta'=>2*GIB,'alpha'=>0,'Mid_1'=>SWAP_LIMIT_MIN]]);
+    same($c['swap_limits'],['Mid_1'=>SWAP_LIMIT_MIN,'alpha'=>0,'zeta'=>2*GIB]);
+    same(validate($c)['swap_limits'],$c['swap_limits']);
+    same(validate(['swap_limits'=>['app'=>1024*GIB]])['swap_limits'],['app'=>1024*GIB]);
+    foreach([['app'=>SWAP_LIMIT_MIN-1],['app'=>-1],['app'=>'1g'],['app'=>1.5],['app'=>null],['app'=>1025*GIB],['../x'=>GIB],[''=>GIB],['vm:x'=>GIB],['a;b'=>GIB]] as $bad) rejects(fn()=>validate(['swap_limits'=>$bad]));
+    rejects(fn()=>validate(['swap_limits'=>'none'])); rejects(fn()=>validate(['swap_limit'=>[]]));
+});
+test('swap read-back accepts only the kernel page rounding and never trusts a foreign path',function(){
+    same(swap_limit_matches(null,'max'),true); same(swap_limit_matches(null,'0'),false);
+    same(swap_limit_matches(0,'0'),true); same(swap_limit_matches(0,'max'),false);
+    same(swap_limit_matches(GIB,(string)GIB),true); same(swap_limit_matches(GIB+100,(string)GIB),true);
+    same(swap_limit_matches(GIB+65536,(string)GIB),false); same(swap_limit_matches(GIB,(string)(GIB+4096)),false);
+    same(swap_limit_matches(GIB,'max'),false); same(swap_limit_matches(GIB,'garbage'),false);
+    rejects(fn()=>write_swap_limit('/tmp/not-a-cgroup',GIB)); rejects(fn()=>write_swap_limit('/sys/fs/cgroup/docker/../../etc',null));
+    same(swap_state('',GIB)['supported'],null); same(swap_state('',GIB)['ok'],false); same(swap_state('',null)['ok'],true);
+});
+test('memory priority requests clear the options a level cannot use',function(){
+    $saved=['level'=>'early','whole'=>true,'reserve_mib'=>0,'eligible'=>true];
+    same(memory_priority_policy($saved,'never'),['level'=>'never','whole'=>true,'reserve_mib'=>0,'eligible'=>false]);
+    same(memory_priority_policy(['level'=>'last','whole'=>false,'reserve_mib'=>512,'eligible'=>false],'early'),['level'=>'early','whole'=>false,'reserve_mib'=>0,'eligible'=>false]);
+    validate(['items'=>['docker:cam'=>memory_priority_policy($saved,'never')]]);
+    rejects(fn()=>memory_priority_policy($saved,'default')); rejects(fn()=>memory_priority_policy($saved,'custom'));
+});
+test('automation requests are validated before anything runs',function(){
+    same(control_parse('list',[]),[]); same(control_parse('list',['name'=>'plex']),['name'=>'plex']);
+    same(control_parse('set-memory-limit',['name'=>'plex','limit'=>'8g']),['name'=>'plex','bytes'=>8*GIB]);
+    same(control_parse('set-memory-limit',['name'=>'plex','limit'=>'none'])['bytes'],0);
+    same(control_parse('set-memory-limit',['name'=>'plex','limit'=>536870912])['bytes'],536870912);
+    same(control_parse('set-swap-limit',['name'=>'plex','limit'=>'unlimited']),['name'=>'plex','bytes'=>null]);
+    same(control_parse('set-swap-limit',['name'=>'plex','limit'=>'NONE'])['bytes'],0);
+    same(control_parse('set-swap-limit',['name'=>'plex','limit'=>'2g'])['bytes'],2*GIB);
+    same(control_parse('set-memory-priority',['name'=>'plex','level'=>'default']),['name'=>'plex','level'=>'default']);
+    same(control_parse('set-memory-priority',['name'=>'plex','level'=>'never'])['level'],'never');
+    same(control_parse('set-cpu-priority',['name'=>'plex','level'=>'lowest'])['level'],'lowest');
+    $bad=[
+        ['set-memory-limit',['name'=>'plex']],['set-memory-limit',['limit'=>'8g']],['set-memory-limit',['name'=>'plex','limit'=>'8g','extra'=>1]],
+        ['set-memory-limit',['name'=>'plex','limit'=>'8 gigs']],['set-memory-limit',['name'=>'plex','limit'=>'$(reboot)']],['set-memory-limit',['name'=>'plex','limit'=>-1]],
+        ['set-memory-limit',['name'=>'plex','limit'=>1.5]],['set-memory-limit',['name'=>'plex','limit'=>true]],['set-memory-limit',['name'=>'plex','limit'=>null]],['set-memory-limit',['name'=>'plex','limit'=>['8g']]],
+        ['set-swap-limit',['name'=>'plex','limit'=>'lots']],['set-swap-limit',['name'=>'plex','limit'=>null]],
+        ['set-memory-priority',['name'=>'plex','level'=>'custom']],['set-memory-priority',['name'=>'plex','level'=>'high']],['set-memory-priority',['name'=>'plex','level'=>5]],
+        ['set-cpu-priority',['name'=>'plex','level'=>'default']],['set-cpu-priority',['name'=>'plex','level'=>'custom']],['set-cpu-priority',['name'=>'plex','level'=>['high']]],
+        ['set-cpu-priority',['name'=>'../etc','level'=>'high']],['set-cpu-priority',['name'=>'a;b','level'=>'high']],['set-cpu-priority',['name'=>'$(x)','level'=>'high']],
+        ['set-cpu-priority',['name'=>"plex\n",'level'=>'high']],['set-cpu-priority',['name'=>7,'level'=>'high']],['set-cpu-priority',['name'=>'','level'=>'high']],
+        ['list',['name'=>'a b;c']],['list',['limit'=>'8g']],['reboot',[]],['set-cpu-priority',[]],
+    ];
+    foreach($bad as [$command,$input]) { try { control_parse($command,$input); } catch(\InvalidArgumentException) { continue; } throw new \RuntimeException('Accepted '.$command.' '.json_encode($input)); }
+});
+test('automation failures map to stable codes and exit statuses',function(){
+    same(control_failure(new \InvalidArgumentException('x')),['invalid_argument',2]); same(control_failure(new \JsonException('x')),['invalid_argument',2]);
+    same(control_failure(new NotFound('x')),['not_found',3]); same(control_failure(new \RuntimeException('x')),['failed',4]);
+    same(control_failure(new OperationBusy('x')),['busy',5]); same(control_failure(new \TypeError('x')),['internal_error',1]);
+});
+test('container records report configured and live values separately',function(){
+    $item=['name'=>'plex','state'=>'running','container_id'=>str_repeat('a',64),'template_available'=>true,'limit'=>8*GIB,'usage'=>GIB,'limit_template'=>'8g','adj'=>0,
+        'policy'=>['level'=>'normal','score'=>0,'custom'=>false,'source'=>'template'],'cpu_shares'=>0,'cpu_weight'=>100,'cpu_template'=>4096,'cpu_template_error'=>null,
+        'cpuset'=>'0-3','cpuset_template'=>'0,8','swap'=>['supported'=>true,'wanted'=>GIB,'live'=>'max','current'=>0,'ok'=>false,'error'=>null]];
+    $r=container_record($item);
+    same($r['container_id'],'aaaaaaaaaaaa'); same($r['cpu_priority']['level'],'high'); same($r['cpu_priority']['live_shares'],1024); same($r['cpu_priority']['applied'],false);
+    same($r['cpu_pinning'],['live'=>'0-3','template'=>'0,8','read_only'=>true,'manage_url'=>'/Settings/CPUset']);
+    same($r['swap_limit']['mode'],'limited'); same($r['swap_limit']['applied'],false); same($r['swap_limit']['live_bytes'],null); same($r['swap_limit']['error']!==null,true);
+    $r=container_record(array_replace($item,['cpu_template'=>26000,'swap'=>['supported'=>true,'wanted'=>null,'live'=>'max','current'=>5,'ok'=>true,'error'=>null]]));
+    same($r['cpu_priority']['level'],'custom'); same($r['swap_limit']['mode'],'unlimited'); same($r['swap_limit']['error'],null);
+    same(container_record(array_replace($item,['state'=>'stopped']))['swap_limit']['applied'],null);
+    same(json_decode(json_encode($r),true),$r);
+});
+test('version command reports support and takes no input',function(){
+    same(control_parse('version',[]),[]);
+    rejects(fn()=>control_parse('version',['name'=>'plex']));
+    $v=control_version();
+    same($v['interface'],1); same(in_array('version',$v['commands'],true),true); same(in_array('swap_limit',$v['features'],true),true);
+    same($v['cpu_levels'],['high','normal','low','lowest']); same($v['memory_levels'],['never','last','normal','early','first','default']);
+    same(CONTROL_READ_ONLY,['version','list']);
+});
+test('memory priority options are validated and layered after the level rules',function(){
+    $ok=control_parse('set-memory-priority',['name'=>'plex','level'=>'last','reserve_mib'=>512,'whole'=>false,'eligible'=>false]);
+    same($ok,['name'=>'plex','level'=>'last','options'=>['reserve_mib'=>512,'whole'=>false,'eligible'=>false]]);
+    same(control_parse('set-memory-priority',['name'=>'plex','level'=>'early'])['level'],'early');
+    foreach([['reserve_mib'=>-1],['reserve_mib'=>65537],['reserve_mib'=>'512'],['reserve_mib'=>1.5],['whole'=>'yes'],['eligible'=>1],['level'=>'default','whole'=>true]] as $extra)
+        rejects(fn()=>control_parse('set-memory-priority',array_replace(['name'=>'plex','level'=>'never'],$extra)));
+    rejects(fn()=>control_parse('set-cpu-priority',['name'=>'plex','level'=>'low','reserve_mib'=>1]));
+    $saved=['level'=>'early','whole'=>false,'reserve_mib'=>0,'eligible'=>true];
+    $p=memory_priority_policy($saved,'last',['reserve_mib'=>512]);
+    same($p['reserve_mib'],512); same($p['eligible'],false); validate(['items'=>['docker:cam'=>$p]]);
+    rejects(fn()=>validate(['items'=>['docker:cam'=>memory_priority_policy($saved,'early',['reserve_mib'=>512])]]));
+    rejects(fn()=>validate(['items'=>['docker:cam'=>memory_priority_policy($saved,'never',['eligible'=>true])]]));
+    $item=['name'=>'plex','state'=>'running','container_id'=>str_repeat('a',64),'template_available'=>true,'limit'=>0,'usage'=>0,'limit_template'=>null,'adj'=>-500,
+        'policy'=>['level'=>'last','score'=>-500,'custom'=>false,'source'=>'template','reserve_mib'=>512,'whole'=>true,'eligible'=>false],'cpu_shares'=>0,'cpu_weight'=>100,'cpu_template'=>null,'cpu_template_error'=>null,
+        'cpuset'=>null,'cpuset_template'=>null,'swap'=>['supported'=>true,'wanted'=>null,'live'=>'max','current'=>0,'ok'=>true,'error'=>null]];
+    $mp=container_record($item)['memory_priority'];
+    same([$mp['reserve_mib'],$mp['whole'],$mp['eligible']],[512,true,false]);
 });
 echo "$passed passed, $failed failed\n"; exit($failed?1:0);

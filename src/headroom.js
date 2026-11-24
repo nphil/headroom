@@ -10,6 +10,12 @@
     const labels = {never:'Always protected',last:'Keep running',normal:'Normal',early:'Gives way first',first:'Gives way before all'};
     const scores = {never:-1000,last:-500,normal:0,early:500,first:1000};
     const score = item => item.policy.score ?? scores[item.policy.level];
+    const cpuLabels = {high:'Gets more CPU',normal:'Normal',low:'Gives way',lowest:'Gives way to everything'};
+    const cpuShares = {high:4096,normal:1024,low:512,lowest:2};
+    const savedShares = item => (item.template_available?item.cpu_template:item.cpu_shares)||1024;
+    const cpuLevel = item => item.cpu_template_error?null:Object.keys(cpuShares).find(k=>cpuShares[k]===savedShares(item))||null;
+    const swapOf = item => item.swap||{wanted:null,supported:null,live:null,current:0,ok:true,error:null};
+    const swapMode = item => { const w=swapOf(item).wanted; return w==null?'unlimited':w===0?'none':'limited'; };
     const colors = ['var(--hr-accent)','var(--ui-color-info-500,var(--hr-accent))','var(--ui-color-success-600,var(--hr-accent))','var(--ui-color-warning-600,var(--hr-accent))','var(--ui-color-secondary-400,var(--hr-accent))','var(--ui-color-error-400,var(--hr-accent))','var(--hr-text)','var(--hr-muted)'];
     let config = null, latest = null, samples = [], timer = null, historyTime = 0, actionError = '';
     let pendingInventory=null;
@@ -76,6 +82,13 @@
       const p=item.policy;
       return (p.custom?`<option value="custom" selected disabled>Custom (${score(item)})</option>`:'')+Object.entries(labels).map(([value,label])=>`<option value="${value}"${!p.custom&&value===p.level?' selected':''}>${label}</option>`).join('');
     }
+    function cpuOptions(item) {
+      const level=cpuLevel(item);
+      return (level?'':`<option value="custom" selected disabled>Custom (${savedShares(item)} shares)</option>`)+Object.entries(cpuLabels).map(([value,label])=>`<option value="${value}"${value===level?' selected':''}>${label}</option>`).join('');
+    }
+    function swapOptions(item) {
+      return Object.entries({unlimited:'Unlimited (default)',none:'None',limited:'Up to a size'}).map(([value,label])=>`<option value="${value}"${value===swapMode(item)?' selected':''}>${label}</option>`).join('');
+    }
     function makeRow(item) {
       const p=item.policy, docker=item.kind==='docker', editable=!docker||item.template_available;
       const row=document.createElement('div'); row.className='hr-app'; row.dataset.id=item.id;
@@ -83,6 +96,8 @@
         +(item.core?'<div class="hr-locked"><i class="fa fa-lock" aria-hidden="true"></i>Always protected</div>':`<form data-form="policy" class="hr-priority"><label><span class="hr-sr">${esc(item.name)} memory priority</span><select name="level"${editable?'':' disabled'}>${options(item)}</select></label><button class="hr-row-save" type="submit" hidden>Apply</button></form>`)
         +`<button type="button" class="hr-details-toggle" data-expand aria-expanded="false" aria-label="Details for ${esc(item.name)}">Details</button></div><div class="hr-app-details" hidden><span data-actual></span><div class="hr-detail-forms">`
         +(docker?`<form data-form="limit"><label>Memory limit (GiB)<input name="gib" type="number" min="0" step="0.0625" value="${item.limit/1073741824}" required${editable?'':' disabled'}></label><small class="hr-help">0 = no limit. Applied live and saved in ${latest.native_memory?'Unraid\'s own Memory limit field':'the Unraid template'}.</small><button type="submit"${editable?'':' disabled'}>Set memory limit</button><p class="hr-help" data-limit-warning></p></form>`:'')
+        +(docker?`<form data-form="cpu"><label>CPU priority<select name="cpu_level"${editable?'':' disabled'}>${cpuOptions(item)}</select></label><small class="hr-help">When the CPU is busy, a lower priority gives way to other apps. Saved as Docker's CPU shares in the Unraid template and applied live. No restart.</small><button type="submit"${editable?'':' disabled'}>Set CPU priority</button><p class="hr-help" data-cpu-live></p><p class="hr-help" data-pinning></p></form>`:'')
+        +(docker?`<form data-form="swap"><label>Swap this app may use<select name="swap_mode">${swapOptions(item)}</select></label><label data-swap-size${swapMode(item)==='limited'?'':' hidden'}>Up to (GiB)<input name="swap_gib" type="number" min="0.0625" step="0.0625" value="${swapOf(item).wanted?+(swapOf(item).wanted/1073741824).toFixed(3):1}"></label><small class="hr-help">Applied to this app's own control group and re-applied by Headroom every time it starts. Swap it already holds stays until it is used.</small><button type="submit">Set swap allowance</button><p class="hr-help" data-swap-live></p></form>`:'')
         +(!item.core?`<form data-form="policy"><input type="hidden" name="level" value="${p.custom?'custom':p.level}"><label>Reserved RAM (MiB)<input type="number" name="reserve_mib" min="0" max="65536" value="${p.reserve_mib}" required${item.kind==='proc'?' disabled':''}></label><small class="hr-help">Only Always protected / Keep running. A reclaim shield, not extra RAM; combined reservations stay below 25% of RAM.</small>${docker?`<label><input name="whole" type="checkbox"${p.whole?' checked':''}> Stop the whole app if one process runs out</label><label><input name="eligible" type="checkbox"${p.eligible?' checked':''}> Allow a graceful early stop</label><small class="hr-help">Whole-app stopping is off by default. Early stops also need the global switch; protected apps are excluded.</small>`:''}<div class="hr-inline"><button type="submit"${editable?'':' disabled'}>Save options</button>${docker&&editable?'<button type="button" data-clear-priority>Use Docker default</button>':''}</div></form>`:'<p class="hr-help">Core services stay protected. Restarted host services are checked automatically. No container processes are treated as core services.</p>')+'</div></div>';
       return row;
     }
@@ -113,7 +128,24 @@
             if(value!==undefined) {if(input.type==='checkbox')input.checked=value;else input.value=value;}
           }
         }
-        const warning=row.querySelector('[data-limit-warning]'); if(warning) warning.textContent=item.limit&&item.usage>item.limit*.85?'Close to the limit. The kernel may stop a process inside this app.':item.swap_limit==='max'?'This host does not cap this app’s swap separately.':'';
+        const warning=row.querySelector('[data-limit-warning]'); if(warning) warning.textContent=item.limit&&item.usage>item.limit*.85?'Close to the limit. The kernel may stop a process inside this app.':'';
+        const cpuLive=row.querySelector('[data-cpu-live]');
+        if(cpuLive) {
+          const saved=savedShares(item), live=item.cpu_shares||1024;
+          cpuLive.textContent=`Live: ${live} shares${item.cpu_weight==null?'':` (kernel weight ${item.cpu_weight})`}`+(item.template_available?` · saved: ${saved}`:'')+(item.cpu_template_error?` · ${item.cpu_template_error}`:'')+(item.template_available&&saved!==live?' · Differs from the saved value; set it here to match.':'');
+          row.querySelector('[data-pinning]').innerHTML=`CPU pinning: ${esc(item.cpuset||'all CPUs')}${item.cpuset_template!=null&&item.cpuset_template!==item.cpuset?` (saved: ${esc(item.cpuset_template)}, used when the app is recreated)`:''}. Managed by Unraid: <a href="/Settings/CPUset">CPU Pinning settings</a>.`;
+        }
+        const swapLive=row.querySelector('[data-swap-live]');
+        if(swapLive) {
+          const s=swapOf(item), bad=Boolean(s.error)||(s.wanted!=null&&item.state==='running'&&s.ok===false);
+          swapLive.classList.toggle('hr-warning',bad);
+          swapLive.textContent=item.state!=='running'?'Not running. A saved limit is applied when the app starts.':s.supported===false?'This kernel offers no per-app swap limit for this app.':`In swap now: ${gib(s.current)} · limit in effect: ${s.live==='max'?'none set':gib(Number(s.live))}`+(s.error?` · Not applied: ${s.error}`:bad?' · Not applied yet; Headroom retries every 15 seconds.':'');
+        }
+        if(cpuLive&&!row.dataset.dirty&&!row.contains(document.activeElement)) {
+          const cpuSelect=row.querySelector('select[name=cpu_level]'); if(cpuSelect.value!==(cpuLevel(item)||'custom')) cpuSelect.innerHTML=cpuOptions(item);
+          const swapSelect=row.querySelector('select[name=swap_mode]'), size=row.querySelector('input[name=swap_gib]'), s=swapOf(item);
+          swapSelect.value=swapMode(item); row.querySelector('[data-swap-size]').hidden=swapMode(item)!=='limited'; if(s.wanted) size.value=+(s.wanted/1073741824).toFixed(3);
+        }
       }
       q('[data-empty]').hidden=matching.length>0;
       q('[data-page-info]').textContent=matching.length?`${page*pageSize+1}–${Math.min((page+1)*pageSize,matching.length)} of ${matching.length}`:'0 apps';
@@ -127,7 +159,7 @@
       q('[name=disk_mount]').innerHTML='<option value="">Choose a supported disk</option>'+data.disks.map(d=>`<option value="${esc(d.mount)}"${d.allowed?'':' disabled'}>${esc(d.mount)} (${esc(d.filesystem)})${d.allowed?'':' — unavailable'}</option>`).join('');
       q('[data-disk-reasons]').textContent=data.disks.filter(d=>!d.allowed).map(d=>`${d.mount}: ${d.reason}`).join('. ')||'No unsupported mounted pools found.';
       for(const form of root.querySelectorAll('form[data-form]')) {
-        if(['policy','limit'].includes(form.dataset.form)) continue;
+        if(['policy','limit','cpu','swap'].includes(form.dataset.form)) continue;
         for(const field of form.elements) if(field.name in config) {if(field.type==='checkbox') field.checked=config[field.name];else field.value=config[field.name];}
       }
       q('[data-form=arc] [name=gib]').value=config.arc_max/1073741824;
@@ -173,6 +205,7 @@
       if(e.target.matches('[data-metric]')) chart();
       if(e.target.matches('[data-hours]')) loadHistory().catch(e=>error(e.message));
       if(e.target.matches('.hr-priority select')) {const row=e.target.closest('[data-id]');row.dataset.dirty='true';row.querySelector('.hr-row-save').hidden=false;const hidden=row.querySelector('input[name=level]');if(hidden)hidden.value=e.target.value;}
+      if(e.target.matches('[name=swap_mode]')) e.target.closest('form').querySelector('[data-swap-size]').hidden=e.target.value!=='limited';
     });
     root.addEventListener('submit',e=>{
       const form=e.target.closest('form[data-form]');if(!form)return;e.preventDefault();
@@ -185,10 +218,19 @@
       } else if(type==='limit') {
         const bytes=Math.round(Number(form.elements.gib.value)*1073741824);data={name:item.name,bytes};
         if(bytes&&bytes<item.usage*1.25&&!confirm(`${item.name} uses ${gib(item.usage)} now. A ${gib(bytes)} limit is close to that. Apply without restarting?`))return;
+      } else if(type==='cpu') {
+        const level=form.elements.cpu_level.value;
+        if(level==='custom') return error('This app has a custom CPU value. Pick a named priority to replace it.');
+        data={name:item.name,level};
+      } else if(type==='swap') {
+        const mode=form.elements.swap_mode.value, size=Number(form.elements.swap_gib.value);
+        if(mode==='limited'&&!(size>=0.0625)) return error('Enter at least 0.0625 GiB (64 MiB), or choose None.');
+        data={name:item.name,bytes:mode==='unlimited'?null:mode==='none'?0:Math.round(size*1073741824)};
+        if(mode==='none'&&item.limit&&!confirm(`${item.name} has a memory limit. With no swap allowed, the kernel stops a process in it at the limit instead of moving memory to compressed swap. Apply?`))return;
       } else if(type==='arc')data={bytes:Math.round(Number(form.elements.gib.value)*1073741824)};
       else for(const field of form.elements)if(field.name)data[field.name]=field.type==='checkbox'?field.checked:field.type==='number'?Number(field.value):field.value.trim();
       if(type==='alerts'&&data.act_early&&!config.act_early&&!confirm('Enable graceful early stops for explicitly eligible apps during sustained pressure? Work in that app may be interrupted.'))return;
-      change(type,data,button);
+      change(type==='cpu'?'cpu-priority':type==='swap'?'swap-limit':type,data,button);
     });
     root.addEventListener('click',e=>{
       const scoped=e.target.closest('[data-scope]');if(scoped){scope=scoped.dataset.scope;page=0;for(const button of root.querySelectorAll('[data-scope]'))button.setAttribute('aria-pressed',String(button===scoped));paintItems();return;}

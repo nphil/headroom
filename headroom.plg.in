@@ -16,7 +16,7 @@ trap cleanup EXIT
 printf '%s  %s\n' '@SHA256@' "$archive" | sha256sum -c -
 mkdir "$stage/new"
 tar --no-same-owner -xzf "$archive" -C "$stage/new"
-for file in cli.php daemon.php lib/config.php lib/system.php lib/templates.php lib/monitor.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
+for file in cli.php control.php daemon.php lib/config.php lib/system.php lib/templates.php lib/monitor.php lib/control.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
   [[ -s "$stage/new/$file" ]] || { echo "Headroom package is incomplete: $file" >&2; exit 1; }
 done
 for file in "$stage/new"/*.php "$stage/new"/lib/*.php; do php -l "$file" >/dev/null; done
@@ -24,7 +24,7 @@ for file in "$stage/new"/*.php "$stage/new"/lib/*.php; do php -l "$file" >/dev/n
 # shellcheck disable=SC2016
 php -r 'foreach (["sqlite3","pcntl","posix","simplexml"] as $ext) if (!extension_loaded($ext)) { fwrite(STDERR,"Missing PHP extension: $ext\n"); exit(1); }'
 chmod -R a+rX "$stage/new"
-chmod 755 "$stage/new/rc.headroom" "$stage/new/cli.php" "$stage/new/daemon.php" "$stage/new/event/"*
+chmod 755 "$stage/new/rc.headroom" "$stage/new/cli.php" "$stage/new/control.php" "$stage/new/daemon.php" "$stage/new/event/"*
 # Back up the previous installer before the native plugin manager replaces it.
 # shellcheck disable=SC2016
 php -r 'require $argv[1]; \Headroom\backup("/boot/config/plugins/headroom.plg");' "$stage/new/lib/config.php"

@@ -22,7 +22,10 @@ Actual Unraid 7.3.2 screens. Headroom follows all four native themes: black, whi
 ## What it does
 
 - **Memory protection:** choose Always protected, Keep running, Normal, Gives way first or Gives way before all (the same words as the protection plan card). Container priority is saved as Docker’s own setting in the Unraid template, so normal updates keep it. The watcher is a backup, not the primary mechanism. Core Unraid services stay Always protected. “Stop whole app” is off by default, so one greedy process need not take every task with it.
-- **Useful limits, without restarts:** change a container's memory limit live and in its saved Unraid template. On Unraid 7.4 and later the limit is saved in Unraid's own **Memory limit** field (the same box on the container's Edit page), and any older `--memory` option in Extra Parameters is moved there once, automatically, so there is a single place to look. Earlier versions keep using a `--memory` option. No app restarts. A too-tight limit is refused. A limit can still stop a process inside an app even if the host has spare RAM; separate swap caps depend on kernel support.
+- **Useful limits, without restarts:** change a container's memory limit live and in its saved Unraid template. On Unraid 7.4 and later the limit is saved in Unraid's own **Memory limit** field (the same box on the container's Edit page), and any older `--memory` option in Extra Parameters is moved there once, automatically, so there is a single place to look. Earlier versions keep using a `--memory` option. No app restarts. A too-tight limit is refused. A limit can still stop a process inside an app even if the host has spare RAM.
+- **CPU priority per app:** Gets more CPU, Normal, Gives way or Gives way to everything. It is saved as Docker's own `--cpu-shares` in the app's Unraid template (exactly one copy, your other options kept) and applied live with no restart. Shares only matter while the CPU is busy. Normal removes the flag. A custom number already in a template is shown as Custom and kept until you pick a level. The live value is read back from Docker and shown.
+- **CPU pinning (read only):** each app's pinning is shown (Docker's live value and the template's) with a link to Unraid's own **CPU Pinning** page. Headroom does not build a second pinning mechanism.
+- **Swap allowance per app:** Unlimited (default), None or up to a size, for the swap (here, compressed memory) an app may use. Docker cannot do this on Unraid (it ignores `--memory-swap` because Docker runs in the root control group), so Headroom stores the choice in its own settings and writes it to the app's **own** control group (`memory.swap.max`). The monitor re-applies it every time the app starts and if it drifts, reads the value back, and shows any refusal in the app's row. Swap an app already holds stays until it is used; a lower limit only stops it taking more. None combined with a memory limit means the kernel stops a process in the app at the limit instead of using swap.
 - **Compressed swap and ZFS cache:** fixed or percentage-based zram size, compression and priorities; guarded resize/refresh; ARC size, target, maximum and hit rate. Existing labelled zram is adopted without draining it.
 - **Warnings and history:** available RAM, swap, kernel memory delays (PSI), OOM kills, RAM-backed files and top consumers. Unraid's own notification system delivers alerts. History is one sample per minute for up to 72 hours, capped at 16 MiB in RAM; it resets on reboot, without writing every sample to your flash drive.
 
@@ -72,6 +75,15 @@ Off by default. You must both enable it globally and mark individual containers 
 
 The graceful request explicitly uses SIGTERM, even if an image requests an immediate-kill stop signal. There is no forced-kill deadline.
 
+### Automation (command line)
+
+For scripts and tools, `/usr/local/emhttp/plugins/headroom/control.php` (run as root, for example over SSH) takes one JSON object and prints one JSON object. It lists every container with its limits and live read-backs (including reserved RAM and the stop options, which `set-memory-priority` can put back), and sets a container's memory limit, memory priority, CPU priority or swap limit with the same safety checks as the Settings page. `version` reports the Headroom version and what the CLI supports, so a caller can detect it. It validates everything, exits non-zero with a JSON error, and never builds shell commands from its input. The full contract is in [docs/HeadroomControl.md](docs/HeadroomControl.md).
+
+```
+ssh unraid /usr/local/emhttp/plugins/headroom/control.php list --name plex
+echo '{"name":"plex","level":"low"}' | ssh unraid /usr/local/emhttp/plugins/headroom/control.php set-cpu-priority
+```
+
 ## Install
 
 In **Plugins → Install Plugin**, paste:
@@ -110,7 +122,7 @@ Configuration and recovery values: `/boot/config/plugins/headroom/`. Runtime rea
 
 ## Remove or roll back
 
-Use **Plugins → Headroom → Remove**. Headroom refuses if active swap cannot safely return to RAM or an old container limit would be unsafe to restore. On refusal it restarts monitoring/protection and remains installed. Successful removal restores prior limits, owned template priorities, ARC and swappiness, restores the owned PSI boot parameter, and removes its hooks/watchdog. Configuration, backups and inactive swap files are retained for recovery.
+Use **Plugins → Headroom → Remove**. Headroom refuses if active swap cannot safely return to RAM or an old container limit would be unsafe to restore. On refusal it restarts monitoring/protection and remains installed. Successful removal restores prior limits, owned template priorities and CPU shares (the original `--cpu-shares` is put back in the template and applied live), ARC and swappiness, restores the owned PSI boot parameter, lifts Headroom's per-app swap limits, and removes its hooks/watchdog. Configuration, backups and inactive swap files are retained for recovery. Going back to an older Headroom version: delete the `swap_limits` entry from `/boot/config/plugins/headroom/settings.json` first, because the older version does not know that setting and rejects the file.
 
 To return to John White's plugin:
 

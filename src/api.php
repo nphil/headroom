@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 namespace Headroom;
-require_once __DIR__.'/lib/monitor.php';
+require_once __DIR__.'/lib/control.php';
 header('Content-Type: application/json; charset=utf-8');
 require_once __DIR__.'/lib/boot.php';
 header('Cache-Control: no-store');
@@ -36,36 +36,26 @@ try {
         if ($action==='policy' || $action==='priority-clear') {
             $id=$body['id']??'';
             if (!is_string($id)||!valid_id($id)) throw new \InvalidArgumentException('Choose a valid app.');
-            if($action==='priority-clear') {
-                if(!str_starts_with($id,'docker:')) throw new \InvalidArgumentException('Only containers have a native Docker flag.');
-                $body['policy']=array_replace(policy($old,$id),['level'=>'normal','reserve_mib'=>0]);
-            }
-            if(!is_array($body['policy']??null)) throw new \InvalidArgumentException('Choose a memory preference.');
-            $items=inventory($old);
-            if (!isset($items[$id])) throw new \InvalidArgumentException('App or service is no longer present.');
-            $keepNative=($body['policy']['level']??'')==='custom' && $items[$id]['kind']==='docker' && $items[$id]['policy']['custom'];
-            $new['items'][$id]=$body['policy'];
-            if($keepNative) $new['items'][$id]['level']=$items[$id]['policy']['level'];
-            $new=validate($new);
-            reservation_check($new,$items); $template=null;
-            try {
-                if($items[$id]['kind']==='docker' && !$keepNative) $template=set_template_priority($items[$id]['name'],$action==='priority-clear'?null:LEVELS[$new['items'][$id]['level']]);
-                $result=apply_policy($new);
-                if($result['errors']) throw new \RuntimeException(implode('; ',$result['errors']));
-                save_config($new);
-            } catch(\Throwable $e) {
-                if($template && $template['changed']) atomic($template['path'],$template['old'],0644);
-                apply_policy($old); throw $e;
-            }
-            $message=$items[$id]['name'].': '.($keepNative?'Custom priority kept':LABELS[$new['items'][$id]['level']]).'. Applied live'.($template?' and saved in its native Unraid template. No restart.':'.');
+            $policy=$body['policy']??null;
+            if ($action!=='priority-clear' && !is_array($policy)) throw new \InvalidArgumentException('Choose a memory preference.');
+            $message=change_policy($id,$action==='priority-clear'?null:$policy,$action==='priority-clear');
         } elseif ($action==='forget') {
             $id=(string)($body['id']??''); if(!valid_id($id)) throw new \InvalidArgumentException('Invalid app.');
             if(isset(inventory($old)[$id])) throw new \RuntimeException('This app still exists. Set its preference instead.');
-            unset($new['items'][$id]); save_config($new); $message='Removed the absent app preference.';
+            unset($new['items'][$id]);
+            if(str_starts_with($id,'docker:')) unset($new['swap_limits'][substr($id,7)]);
+            save_config($new); $message='Removed the absent app preference.';
         } elseif ($action==='limit') {
             $name=$body['name']??''; $bytes=$body['bytes']??null;
             if(!is_string($name)||!valid_id('docker:'.$name)||!is_int($bytes)) throw new \InvalidArgumentException('Invalid memory limit.');
-            set_limit($name,$bytes); $message=$name.': memory limit '.($bytes?round($bytes/GIB,2).' GiB':'cleared').' live and '.(native_memory_supported()?'in Unraid\'s own Memory limit field':'in the Unraid template').'. No restart.';
+            $message=change_limit($name,$bytes);
+        } elseif ($action==='cpu-priority') {
+            $args=control_parse('set-cpu-priority',$body);
+            $message=change_cpu_priority($args['name'],$args['level']);
+        } elseif ($action==='swap-limit') {
+            $name=$body['name']??''; $bytes=$body['bytes']??null;
+            if(!is_string($name)||!valid_id('docker:'.$name)||($bytes!==null&&!is_int($bytes))) throw new \InvalidArgumentException('Invalid swap limit.');
+            $message=change_swap_limit($name,$bytes);
         } elseif ($action==='zram') {
             $allowed=['zram_enabled','zram_size','zram_percent','zram_algo','zram_priority','swappiness'];
             if(array_diff(array_keys($body),$allowed)) throw new \InvalidArgumentException('Unknown compressed-swap setting.');
@@ -97,7 +87,7 @@ try {
             notify('Headroom test','Test notification delivered by the normal Unraid notification system. No apps were stopped.','normal'); $message='Test sent through Unraid notifications.';
         } else { throw new \InvalidArgumentException('Unknown action.'); }
         event('settings',$message); $reply=['message'=>$message];
-        if(in_array($action,['policy','priority-clear','limit'],true)) {
+        if(in_array($action,['policy','priority-clear','limit','cpu-priority','swap-limit'],true)) {
             $reply['inventory']=['items'=>public_items(inventory(config())),'updated'=>microtime(true)];
         }
         return $reply;
