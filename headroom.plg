@@ -1,24 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<PLUGIN name="headroom" author="Nitin Philip" version="2026.11.21.1" launch="Settings/Headroom" pluginURL="https://raw.githubusercontent.com/nphil/headroom/main/headroom.plg" min="7.0.0" support="https://github.com/nphil/headroom/issues" icon="headroom.svg">
-<CHANGES><![CDATA[## 2026.11.21.1
-Container memory limits now use Unraid's own Memory limit field on Unraid 7.4 and later. Headroom reads and writes the limit there and removes any older --memory option from Extra Parameters, so there is a single place to look. Existing limits are moved across automatically on update and whenever Headroom starts. Live limits are unchanged and no app restarts. Templates are backed up first, and any template that is ambiguous (for example a Memory field that disagrees with its --memory option) is left alone and reported. Unraid 7.3 and earlier keep saving limits as a --memory option.
+<PLUGIN name="headroom" author="Nitin Philip" version="2026.11.24.1" launch="Settings/Headroom" pluginURL="https://raw.githubusercontent.com/nphil/headroom/main/headroom.plg" min="7.0.0" support="https://github.com/nphil/headroom/issues" icon="headroom.svg">
+<CHANGES><![CDATA[## 2026.11.24.1
+Per-app CPU priority, read-only CPU pinning, per-app swap allowance and a command-line interface. CPU priority (Gets more CPU, Normal, Gives way, Gives way to everything) is saved as Docker's own --cpu-shares in the app's Unraid template (one copy, your other options and any custom number kept) and applied live with no restart; the live value is shown. Each app's CPU pinning is shown with a link to Unraid's own CPU Pinning page. The swap allowance (Unlimited, None or up to a size) is stored in Headroom's settings and written to the app's own control group, re-applied by the monitor whenever the app starts or the value drifts, read back, and any refusal is shown in the app's row. New /usr/local/emhttp/plugins/headroom/control.php (run as root, JSON in and out) lists containers with live read-backs (including reserved RAM and stop options) and sets memory limit, memory priority, CPU priority and swap limit with the same checks as the Settings page; its version command reports what it supports. See docs/HeadroomControl.md. Removing Headroom restores the original --cpu-shares and lifts swap limits. Settings gain an additive swap_limits entry; remove it before going back to an older version.
 ]]></CHANGES>
-<FILE Name="/boot/config/plugins/headroom/headroom-2026.11.21.1.tar.gz">
-<URL>https://github.com/nphil/headroom/releases/download/2026.11.21.1/headroom-2026.11.21.1.tar.gz</URL>
-<MD5>48c1e1c299e4323d9ee9806de78c18d4</MD5>
+<FILE Name="/boot/config/plugins/headroom/headroom-2026.11.24.1.tar.gz">
+<URL>https://github.com/nphil/headroom/releases/download/2026.11.24.1/headroom-2026.11.24.1.tar.gz</URL>
+<MD5>15229990c5b5a11f1a720516bad616ec</MD5>
 </FILE>
-<FILE Name="/tmp/headroom-install-2026.11.21.1" Run="/bin/bash"><INLINE><![CDATA[
+<FILE Name="/tmp/headroom-install-2026.11.24.1" Run="/bin/bash"><INLINE><![CDATA[
 #!/bin/bash
 set -euo pipefail
 root=/usr/local/emhttp/plugins/headroom
-archive=/boot/config/plugins/headroom/headroom-2026.11.21.1.tar.gz
+archive=/boot/config/plugins/headroom/headroom-2026.11.24.1.tar.gz
 stage=$(mktemp -d /tmp/headroom-install.XXXXXX)
-cleanup() { rm -rf -- "$stage"; rm -f -- /tmp/headroom-install-2026.11.21.1; }
+cleanup() { rm -rf -- "$stage"; rm -f -- /tmp/headroom-install-2026.11.24.1; }
 trap cleanup EXIT
-printf '%s  %s\n' '33dd0557aa40ea38f8e7302b61d61af34ffac65f7bf587eaef01badb14b6cc92' "$archive" | sha256sum -c -
+printf '%s  %s\n' '733ae7c45bbd6e817c6ed9053178df9a78efee48fea53fa4ebb680db177397d0' "$archive" | sha256sum -c -
 mkdir "$stage/new"
 tar --no-same-owner -xzf "$archive" -C "$stage/new"
-for file in cli.php daemon.php lib/config.php lib/system.php lib/templates.php lib/monitor.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
+for file in cli.php control.php daemon.php lib/config.php lib/system.php lib/templates.php lib/monitor.php lib/control.php lib/swap.php lib/install.php lib/boot.php api.php ui.php Headroom.page HeadroomDash.page headroom.css headroom.js headroom.svg rc.headroom version event/disks_mounted event/stopping; do
   [[ -s "$stage/new/$file" ]] || { echo "Headroom package is incomplete: $file" >&2; exit 1; }
 done
 for file in "$stage/new"/*.php "$stage/new"/lib/*.php; do php -l "$file" >/dev/null; done
@@ -26,7 +26,7 @@ for file in "$stage/new"/*.php "$stage/new"/lib/*.php; do php -l "$file" >/dev/n
 # shellcheck disable=SC2016
 php -r 'foreach (["sqlite3","pcntl","posix","simplexml"] as $ext) if (!extension_loaded($ext)) { fwrite(STDERR,"Missing PHP extension: $ext\n"); exit(1); }'
 chmod -R a+rX "$stage/new"
-chmod 755 "$stage/new/rc.headroom" "$stage/new/cli.php" "$stage/new/daemon.php" "$stage/new/event/"*
+chmod 755 "$stage/new/rc.headroom" "$stage/new/cli.php" "$stage/new/control.php" "$stage/new/daemon.php" "$stage/new/event/"*
 # Back up the previous installer before the native plugin manager replaces it.
 # shellcheck disable=SC2016
 php -r 'require $argv[1]; \Headroom\backup("/boot/config/plugins/headroom.plg");' "$stage/new/lib/config.php"
@@ -40,13 +40,13 @@ if ! php "$root/cli.php" install; then
   exit 1
 fi
 "$root/rc.headroom" start
-echo 'Headroom 2026.11.21.1 installed. Open Settings > Headroom. No server or app was restarted.'
+echo 'Headroom 2026.11.24.1 installed. Open Settings > Headroom. No server or app was restarted.'
 ]]></INLINE></FILE>
-<FILE Name="/tmp/headroom-remove-2026.11.21.1" Run="/bin/bash" Method="remove"><INLINE><![CDATA[
+<FILE Name="/tmp/headroom-remove-2026.11.24.1" Run="/bin/bash" Method="remove"><INLINE><![CDATA[
 #!/bin/bash
 set -euo pipefail
 root=/usr/local/emhttp/plugins/headroom
-trap 'rm -f /tmp/headroom-remove-2026.11.21.1' EXIT
+trap 'rm -f /tmp/headroom-remove-2026.11.24.1' EXIT
 "$root/rc.headroom" stop
 if ! php "$root/cli.php" uninstall; then
   # A refused evacuation must not leave monitoring/protection switched off.
